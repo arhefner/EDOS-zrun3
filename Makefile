@@ -11,11 +11,11 @@ HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/ztext.c host/objects.c host/properties.c host/dictionary.c \
 	host/parser.c tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
-	lib/zprop.prg lib/zdict.prg lib/zparse.prg
+	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
 	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
 	diag/zdictdiag.prg diag/zdictdiag_main.prg diag/zparsediag.prg \
-	diag/zparsediag_main.prg
+	diag/zparsediag_main.prg diag/ztermdiag.prg diag/ztermdiag_main.prg
 
 .PHONY: all test asm diag clean
 
@@ -31,6 +31,7 @@ asm: $(ASM_MODULES)
 	@test -f lib/zprop.prg
 	@test -f lib/zdict.prg
 	@test -f lib/zparse.prg
+	@test -f lib/zterm.prg
 
 # diag/zdiag_main, diag/zobjdiag_main, diag/zpropdiag_main,
 # diag/zdictdiag_main, and diag/zparsediag_main are ELF-DOS front ends
@@ -40,6 +41,8 @@ asm: $(ASM_MODULES)
 # docs/ARCHITECTURE.md's "diagnostic dispatch loop" step) -- run them
 # on hardware or under an emulator with the real ELF-DOS kernel
 # loaded; K_MSG/K_INMSG have nothing to call otherwise.
+# diag/ztermdiag_main is different: it's an interactive demo, not an
+# automated check list (see zterm.asm's own header comment for why).
 diag: $(ASM_MODULES) $(DIAG_MODULES)
 	$(LINK) $(LFLAGS) -o diag/zdiag diag/zdiag_main.prg diag/zdiag.prg lib/zmem.prg lib/zstack.prg
 	rm -f diag/zdiag.lkb
@@ -51,6 +54,8 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/zdictdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zparsediag diag/zparsediag_main.prg diag/zparsediag.prg lib/zparse.prg lib/zdict.prg
 	rm -f diag/zparsediag.lkb
+	$(LINK) $(LFLAGS) -o diag/ztermdiag diag/ztermdiag_main.prg lib/zterm.prg
+	rm -f diag/ztermdiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def
 	cd lib && $(ASM) $(ASMFLAGS) $*.asm
@@ -68,4 +73,4 @@ clean:
 	rm -rf build
 	rm -f $(ASM_MODULES) $(ASM_MODULES:.prg=.build) $(ASM_MODULES:.prg=.lst)
 	rm -f $(DIAG_MODULES) $(DIAG_MODULES:.prg=.build) $(DIAG_MODULES:.prg=.lst)
-	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb diag/zparsediag diag/zparsediag.lkb
+	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb diag/zparsediag diag/zparsediag.lkb diag/ztermdiag diag/ztermdiag.lkb
