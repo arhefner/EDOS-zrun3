@@ -1,0 +1,12 @@
+/build/
+/core
+/lib/*.build
+/lib/*.lst
+/lib/*.prg
+/diag/*.build
+/diag/*.lst
+/diag/*.prg
+/diag/*.lkb
+/diag/*.hex
+/diag/*.bin
+/diag/zdiag

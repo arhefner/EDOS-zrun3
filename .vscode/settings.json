@@ -1,0 +1,8 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "printf": true,
+        "awk": true,
+        "make": true,
+        "/opt/elfc/asm02": true
+    }
+}
