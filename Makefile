@@ -11,9 +11,10 @@ HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/ztext.c host/objects.c host/properties.c host/dictionary.c \
 	tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
-	lib/zprop.prg
+	lib/zprop.prg lib/zdict.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
-	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg
+	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
+	diag/zdictdiag.prg diag/zdictdiag_main.prg
 
 .PHONY: all test asm diag clean
 
@@ -27,10 +28,12 @@ asm: $(ASM_MODULES)
 	@test -f lib/zstack.prg
 	@test -f lib/zobj.prg
 	@test -f lib/zprop.prg
+	@test -f lib/zdict.prg
 
-# diag/zdiag_main, diag/zobjdiag_main, and diag/zpropdiag_main are
-# ELF-DOS front ends for zdiag.asm/zobjdiag.asm/zpropdiag.asm's checks
-# against the resident memory/stack, object/attribute, and property
+# diag/zdiag_main, diag/zobjdiag_main, diag/zpropdiag_main, and
+# diag/zdictdiag_main are ELF-DOS front ends for zdiag.asm/
+# zobjdiag.asm/zpropdiag.asm/zdictdiag.asm's checks against the
+# resident memory/stack, object/attribute, property, and dictionary
 # primitives (see docs/ARCHITECTURE.md's "diagnostic dispatch loop"
 # step) -- run them on hardware or under an emulator with the real
 # ELF-DOS kernel loaded; K_MSG/K_INMSG have nothing to call otherwise.
@@ -41,6 +44,8 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/zobjdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zpropdiag diag/zpropdiag_main.prg diag/zpropdiag.prg lib/zprop.prg lib/zobj.prg
 	rm -f diag/zpropdiag.lkb
+	$(LINK) $(LFLAGS) -o diag/zdictdiag diag/zdictdiag_main.prg diag/zdictdiag.prg lib/zdict.prg
+	rm -f diag/zdictdiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def
 	cd lib && $(ASM) $(ASMFLAGS) $*.asm
@@ -58,4 +63,4 @@ clean:
 	rm -rf build
 	rm -f $(ASM_MODULES) $(ASM_MODULES:.prg=.build) $(ASM_MODULES:.prg=.lst)
 	rm -f $(DIAG_MODULES) $(DIAG_MODULES:.prg=.build) $(DIAG_MODULES:.prg=.lst)
-	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb
+	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb
