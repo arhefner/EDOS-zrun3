@@ -7,6 +7,7 @@
 #include "ztext.h"
 #include "objects.h"
 #include "properties.h"
+#include "dictionary.h"
 
 static int append_char(char character, void *context)
 {
@@ -51,6 +52,12 @@ int main(void)
     uint16_t prop_value;
     uint16_t short_addr;
     uint16_t short_len;
+    uint8_t dict_image[64] = {0};
+    struct story_mem dict_memory;
+    struct dict_header dict_hdr;
+    uint16_t dict_entry_addr;
+    uint8_t dict_encoded[ZTEXT_V3_ENCODED_LENGTH];
+    const uint16_t DICT_ADDR = 0;
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -211,6 +218,74 @@ int main(void)
     assert(prop_get_next(&obj_memory, OBJECT_TABLE, 2, 0, &obj_num) == 0 &&
         obj_num == 0);
     assert(prop_get_next(&obj_memory, OBJECT_TABLE, 1, 9, &obj_num) != 0);
+
+    /* ztext_encode: hand-verified against the V3 z-char tables --
+     * 'c'=8, 'a'=6, 't'=25, then three padding (5) z-chars:
+     * word0 = 8<<10 | 6<<5 | 25 = 0x20d9
+     * word1 = 0x8000 | 5<<10 | 5<<5 | 5 = 0x94a5 */
+    assert(ztext_encode("cat", 3, dict_encoded) == 0 &&
+        dict_encoded[0] == 0x20 && dict_encoded[1] == 0xd9 &&
+        dict_encoded[2] == 0x94 && dict_encoded[3] == 0xa5);
+    {
+        /* an overlong word truncates at 6 z-characters, not 6 bytes */
+        uint8_t encoded_long[ZTEXT_V3_ENCODED_LENGTH];
+        uint8_t encoded_truncated[ZTEXT_V3_ENCODED_LENGTH];
+        assert(ztext_encode("alphabet", 8, encoded_long) == 0);
+        assert(ztext_encode("alphab", 6, encoded_truncated) == 0);
+        assert(memcmp(encoded_long, encoded_truncated,
+                      ZTEXT_V3_ENCODED_LENGTH) == 0);
+    }
+    {
+        /* uppercase round-trips through the A1 shift character */
+        uint8_t encoded_upper[ZTEXT_V3_ENCODED_LENGTH];
+        char decoded_upper[8] = "";
+        assert(ztext_encode("Hi", 2, encoded_upper) == 0);
+        assert(ztext_decode(encoded_upper, ZTEXT_V3_ENCODED_LENGTH,
+                            append_char, decoded_upper) == 0);
+        assert(strcmp(decoded_upper, "Hi") == 0);
+    }
+    assert(ztext_encode("h@i", 3, dict_encoded) != 0);   /* '@' unencodable */
+
+    /* Dictionary: 1 separator (','), 7-byte entries (4 text + 3 data),
+     * 3 entries -- "cat", "dog", "run" -- each followed by 3 arbitrary
+     * data bytes a real game would use for part-of-speech flags. */
+    dict_image[0] = 1;
+    dict_image[1] = ',';
+    dict_image[2] = 7;
+    dict_image[3] = 0x00;
+    dict_image[4] = 0x03;
+    assert(ztext_encode("cat", 3, &dict_image[5]) == 0);
+    dict_image[9] = 0xaa;
+    dict_image[10] = 0xbb;
+    dict_image[11] = 0xcc;
+    assert(ztext_encode("dog", 3, &dict_image[12]) == 0);
+    dict_image[16] = 0xdd;
+    dict_image[17] = 0xee;
+    dict_image[18] = 0xff;
+    assert(ztext_encode("run", 3, &dict_image[19]) == 0);
+    dict_image[23] = 0x11;
+    dict_image[24] = 0x22;
+    dict_image[25] = 0x33;
+
+    assert(story_mem_init(&dict_memory, dict_image, sizeof(dict_image),
+                          sizeof(dict_image)) == 0);
+    assert(dict_parse_header(&dict_memory, DICT_ADDR, &dict_hdr) == 0 &&
+        dict_hdr.entry_length == 7 && dict_hdr.entry_count == 3 &&
+        dict_hdr.entries_addr == 5);
+
+    assert(dict_find_word(&dict_memory, DICT_ADDR, "dog", 3,
+                          &dict_entry_addr) == 0 && dict_entry_addr == 12);
+    {
+        uint8_t data_byte;
+        assert(story_mem_read8(&dict_memory, (uint16_t)(dict_entry_addr + 4),
+                               &data_byte) == 0 && data_byte == 0xdd);
+    }
+    assert(dict_find_word(&dict_memory, DICT_ADDR, "cat", 3,
+                          &dict_entry_addr) == 0 && dict_entry_addr == 5);
+    assert(dict_find_word(&dict_memory, DICT_ADDR, "run", 3,
+                          &dict_entry_addr) == 0 && dict_entry_addr == 19);
+    assert(dict_find_word(&dict_memory, DICT_ADDR, "xyz", 3,
+                          &dict_entry_addr) == 0 && dict_entry_addr == 0);
 
     return 0;
 }
