@@ -14,6 +14,7 @@
 
 #include    include/opcodes.def
 
+            extrn   zdi_dict_addr
             extrn   zdi_entries
             extrn   zdi_entry_length
             extrn   zdi_entry_count
@@ -25,11 +26,19 @@
             extrn   zdict_encode
             extrn   zdict_lookup
 
-; zdict_init: RD = dictionary address. Parses the separator table
-; (skipped over, not otherwise used here), entry length, and entry
-; count, and remembers where the entries themselves start.
+; zdict_init: RD = dictionary address. Remembers the dictionary
+; address itself (for zparse.asm's separator-table lookups) and parses
+; the entry length and entry count, remembering where the entries
+; themselves start.
             proc    zdict_init
             mov     r8, rd              ; r8 = dictionary address
+            mov     rb, zdi_dict_addr
+            ghi     rd
+            str     rb
+            inc     rb
+            glo     rd
+            str     rb
+
             ldn     r8                  ; d = separator count
             plo     r9
             ldi     0
@@ -398,13 +407,15 @@ zdf_error:
             endp
 
             proc    _zdict_data
-zdi_entries:        dw      0
+zdi_dict_addr:       dw      0
+zdi_entries:         dw      0
 zdi_entry_length:    db      0
 zdi_entry_count:     dw      0
 zde_zchars:          ds      6
 zde_output:          dw      0
 zdf_scratch:         ds      4
 zde_punct_table:     db      "0123456789.,!?_#'",34,"/",92,"-:()"
+                public  zdi_dict_addr
                 public  zdi_entries
                 public  zdi_entry_length
                 public  zdi_entry_count
