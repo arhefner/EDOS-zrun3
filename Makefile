@@ -8,7 +8,7 @@ LINK ?= /opt/elfc/link02
 LFLAGS ?= -b -be -r
 
 HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
-	host/ztext.c tests/test_host.c
+	host/ztext.c host/objects.c host/properties.c tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg
 

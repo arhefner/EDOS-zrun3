@@ -5,6 +5,8 @@
 #include "story_header.h"
 #include "vm_state.h"
 #include "ztext.h"
+#include "objects.h"
+#include "properties.h"
 
 static int append_char(char character, void *context)
 {
@@ -39,6 +41,16 @@ int main(void)
     struct vm_frame frame;
     uint16_t locals[] = {0x1234, 0x5678};
     uint16_t value;
+    uint8_t obj_image[256] = {0};
+    struct story_mem obj_memory;
+    const uint16_t OBJECT_TABLE = 0;
+    uint8_t obj_num;
+    int attr_flag;
+    uint16_t prop_addr;
+    uint8_t prop_len;
+    uint16_t prop_value;
+    uint16_t short_addr;
+    uint16_t short_len;
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -90,5 +102,115 @@ int main(void)
         assert(vm_frame_pop(&state, &frame) == 0 && frame.return_pc == 0x3456 &&
             frame.locals[1] == 0x5678);
         assert(vm_pop(&state, &value) != 0);
+
+    /* Object table: object 1 is the parent of object 2, which has
+     * object 3 as a sibling. Property defaults[6] (property 7) is
+     * 0x2222, used below since object 2 has no properties of its own. */
+    obj_image[12] = 0x22;
+    obj_image[13] = 0x22;
+
+    obj_image[68] = 2;                 /* object 1: child = 2 */
+    obj_image[69] = 0x00;
+    obj_image[70] = 0x64;              /* object 1: property table @ 100 */
+
+    obj_image[75] = 1;                 /* object 2: parent = 1 */
+    obj_image[76] = 3;                 /* object 2: sibling = 3 */
+    obj_image[78] = 0x00;
+    obj_image[79] = 0x6e;              /* object 2: property table @ 110 */
+
+    obj_image[84] = 1;                 /* object 3: parent = 1 */
+    obj_image[87] = 0x00;
+    obj_image[88] = 0x73;              /* object 3: property table @ 115 */
+
+    obj_image[100] = 1;                /* object 1: 1-word short name */
+    obj_image[101] = 0x80;
+    obj_image[102] = 0x00;
+    obj_image[103] = 0x05;             /* property 5, length 1 */
+    obj_image[104] = 0x99;
+    obj_image[105] = 0x23;             /* property 3, length 2 */
+    obj_image[106] = 0x12;
+    obj_image[107] = 0x34;
+    obj_image[108] = 0x00;             /* end of object 1's properties */
+
+    obj_image[110] = 0;                /* object 2: no short name */
+    obj_image[111] = 0x00;             /* end of object 2's properties (none) */
+
+    obj_image[115] = 0;                /* object 3: no short name */
+    obj_image[116] = 0x05;             /* property 5, length 1 */
+    obj_image[117] = 0x42;
+    obj_image[118] = 0x00;             /* end of object 3's properties */
+
+    assert(story_mem_init(&obj_memory, obj_image, sizeof(obj_image),
+                          sizeof(obj_image)) == 0);
+
+    assert(obj_get_parent(&obj_memory, OBJECT_TABLE, 1, &obj_num) == 0 &&
+        obj_num == 0);
+    assert(obj_get_child(&obj_memory, OBJECT_TABLE, 1, &obj_num) == 0 &&
+        obj_num == 2);
+    assert(obj_get_parent(&obj_memory, OBJECT_TABLE, 2, &obj_num) == 0 &&
+        obj_num == 1);
+    assert(obj_get_sibling(&obj_memory, OBJECT_TABLE, 2, &obj_num) == 0 &&
+        obj_num == 3);
+    assert(obj_get_parent(&obj_memory, OBJECT_TABLE, 0, &obj_num) != 0);
+
+    assert(obj_test_attr(&obj_memory, OBJECT_TABLE, 1, 3, &attr_flag) == 0 &&
+        attr_flag == 0);
+    assert(obj_set_attr(&obj_memory, OBJECT_TABLE, 1, 3) == 0);
+    assert(obj_test_attr(&obj_memory, OBJECT_TABLE, 1, 3, &attr_flag) == 0 &&
+        attr_flag == 1);
+    assert(obj_clear_attr(&obj_memory, OBJECT_TABLE, 1, 3) == 0);
+    assert(obj_test_attr(&obj_memory, OBJECT_TABLE, 1, 3, &attr_flag) == 0 &&
+        attr_flag == 0);
+
+    assert(obj_remove(&obj_memory, OBJECT_TABLE, 2) == 0);
+    assert(obj_get_parent(&obj_memory, OBJECT_TABLE, 2, &obj_num) == 0 &&
+        obj_num == 0);
+    assert(obj_get_child(&obj_memory, OBJECT_TABLE, 1, &obj_num) == 0 &&
+        obj_num == 3);
+
+    assert(obj_insert(&obj_memory, OBJECT_TABLE, 2, 3) == 0);
+    assert(obj_get_parent(&obj_memory, OBJECT_TABLE, 2, &obj_num) == 0 &&
+        obj_num == 3);
+    assert(obj_get_child(&obj_memory, OBJECT_TABLE, 3, &obj_num) == 0 &&
+        obj_num == 2);
+    assert(obj_get_sibling(&obj_memory, OBJECT_TABLE, 2, &obj_num) == 0 &&
+        obj_num == 0);
+
+    assert(obj_short_name(&obj_memory, OBJECT_TABLE, 1, &short_addr,
+                          &short_len) == 0 && short_addr == 101 &&
+        short_len == 2);
+    assert(obj_short_name(&obj_memory, OBJECT_TABLE, 2, &short_addr,
+                          &short_len) == 0 && short_addr == 111 &&
+        short_len == 0);
+
+    assert(prop_get_addr(&obj_memory, OBJECT_TABLE, 1, 5, &prop_addr) == 0 &&
+        prop_addr != 0);
+    assert(prop_get_len(&obj_memory, prop_addr, &prop_len) == 0 &&
+        prop_len == 1);
+    assert(prop_get_addr(&obj_memory, OBJECT_TABLE, 1, 3, &prop_addr) == 0 &&
+        prop_addr != 0);
+    assert(prop_get_len(&obj_memory, prop_addr, &prop_len) == 0 &&
+        prop_len == 2);
+    assert(prop_get_addr(&obj_memory, OBJECT_TABLE, 1, 9, &prop_addr) == 0 &&
+        prop_addr == 0);
+    assert(prop_get_len(&obj_memory, 0, &prop_len) == 0 && prop_len == 0);
+
+    assert(prop_get(&obj_memory, OBJECT_TABLE, 1, 5, &prop_value) == 0 &&
+        prop_value == 0x99);
+    assert(prop_get(&obj_memory, OBJECT_TABLE, 1, 3, &prop_value) == 0 &&
+        prop_value == 0x1234);
+    assert(prop_get(&obj_memory, OBJECT_TABLE, 2, 7, &prop_value) == 0 &&
+        prop_value == 0x2222);
+
+    assert(prop_get_next(&obj_memory, OBJECT_TABLE, 1, 0, &obj_num) == 0 &&
+        obj_num == 5);
+    assert(prop_get_next(&obj_memory, OBJECT_TABLE, 1, 5, &obj_num) == 0 &&
+        obj_num == 3);
+    assert(prop_get_next(&obj_memory, OBJECT_TABLE, 1, 3, &obj_num) == 0 &&
+        obj_num == 0);
+    assert(prop_get_next(&obj_memory, OBJECT_TABLE, 2, 0, &obj_num) == 0 &&
+        obj_num == 0);
+    assert(prop_get_next(&obj_memory, OBJECT_TABLE, 1, 9, &obj_num) != 0);
+
     return 0;
 }
