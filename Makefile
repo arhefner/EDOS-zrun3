@@ -9,7 +9,7 @@ LFLAGS ?= -b -be -r
 
 HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/ztext.c host/objects.c host/properties.c host/dictionary.c \
-	tests/test_host.c
+	host/parser.c tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
 	lib/zprop.prg lib/zdict.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \

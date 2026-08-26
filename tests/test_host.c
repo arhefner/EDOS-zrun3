@@ -8,6 +8,7 @@
 #include "objects.h"
 #include "properties.h"
 #include "dictionary.h"
+#include "parser.h"
 
 static int append_char(char character, void *context)
 {
@@ -58,6 +59,15 @@ int main(void)
     uint16_t dict_entry_addr;
     uint8_t dict_encoded[ZTEXT_V3_ENCODED_LENGTH];
     const uint16_t DICT_ADDR = 0;
+    uint8_t parser_image[80] = {0};
+    struct story_mem parser_memory;
+    const uint16_t PARSER_DICT_ADDR = 0;
+    const uint16_t PARSER_TEXT_ADDR = 30;
+    const uint16_t PARSER_PARSE_ADDR = 50;
+    const char parser_text[] = "take cat, run";
+    size_t parser_index;
+    uint8_t parser_byte;
+    uint16_t parse_word;
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -286,6 +296,87 @@ int main(void)
                           &dict_entry_addr) == 0 && dict_entry_addr == 19);
     assert(dict_find_word(&dict_memory, DICT_ADDR, "xyz", 3,
                           &dict_entry_addr) == 0 && dict_entry_addr == 0);
+
+    /* Parser: same dictionary layout as above, a fresh buffer so the
+     * two tests stay independent. "take cat, run" exercises an
+     * unlisted word ("take"), a listed one ("cat"), the separator
+     * ',' as its own one-character token (also unlisted), and a
+     * second listed word ("run"). */
+    parser_image[0] = 1;
+    parser_image[1] = ',';
+    parser_image[2] = 7;
+    parser_image[3] = 0x00;
+    parser_image[4] = 0x03;
+    parser_image[5] = 0x20;
+    parser_image[6] = 0xd9;
+    parser_image[7] = 0x94;
+    parser_image[8] = 0xa5;            /* "cat" */
+    parser_image[9] = 0xaa;
+    parser_image[10] = 0xbb;
+    parser_image[11] = 0xcc;
+    parser_image[12] = 0x26;
+    parser_image[13] = 0x8c;
+    parser_image[14] = 0x94;
+    parser_image[15] = 0xa5;           /* "dog" */
+    parser_image[16] = 0xdd;
+    parser_image[17] = 0xee;
+    parser_image[18] = 0xff;
+    parser_image[19] = 0x5f;
+    parser_image[20] = 0x53;
+    parser_image[21] = 0x94;
+    parser_image[22] = 0xa5;           /* "run" */
+    parser_image[23] = 0x11;
+    parser_image[24] = 0x22;
+    parser_image[25] = 0x33;
+
+    for (parser_index = 0; parser_index < sizeof(parser_text) - 1;
+        ++parser_index) {
+        parser_image[PARSER_TEXT_ADDR + parser_index] =
+            (uint8_t)parser_text[parser_index];
+    }
+    parser_image[PARSER_PARSE_ADDR] = 10;      /* max words */
+
+    assert(story_mem_init(&parser_memory, parser_image,
+                          sizeof(parser_image), sizeof(parser_image)) == 0);
+    assert(parser_tokenize(&parser_memory, PARSER_DICT_ADDR,
+                           PARSER_TEXT_ADDR,
+                           (uint8_t)(sizeof(parser_text) - 1), 2,
+                           PARSER_PARSE_ADDR) == 0);
+
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 1,
+                           &parser_byte) == 0 && parser_byte == 4);
+
+    /* word 0: "take" -- not in the dictionary */
+    assert(story_mem_read16(&parser_memory, PARSER_PARSE_ADDR + 2,
+                            &parse_word) == 0 && parse_word == 0);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 4,
+                           &parser_byte) == 0 && parser_byte == 4);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 5,
+                           &parser_byte) == 0 && parser_byte == 2);
+
+    /* word 1: "cat" -- found at dictionary offset 5 */
+    assert(story_mem_read16(&parser_memory, PARSER_PARSE_ADDR + 6,
+                            &parse_word) == 0 && parse_word == 5);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 8,
+                           &parser_byte) == 0 && parser_byte == 3);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 9,
+                           &parser_byte) == 0 && parser_byte == 7);
+
+    /* word 2: "," -- a separator, so it's its own token; not listed */
+    assert(story_mem_read16(&parser_memory, PARSER_PARSE_ADDR + 10,
+                            &parse_word) == 0 && parse_word == 0);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 12,
+                           &parser_byte) == 0 && parser_byte == 1);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 13,
+                           &parser_byte) == 0 && parser_byte == 10);
+
+    /* word 3: "run" -- found at dictionary offset 19 */
+    assert(story_mem_read16(&parser_memory, PARSER_PARSE_ADDR + 14,
+                            &parse_word) == 0 && parse_word == 19);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 16,
+                           &parser_byte) == 0 && parser_byte == 3);
+    assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 17,
+                           &parser_byte) == 0 && parser_byte == 12);
 
     return 0;
 }
