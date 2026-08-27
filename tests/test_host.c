@@ -10,6 +10,7 @@
 #include "dictionary.h"
 #include "parser.h"
 #include "decode.h"
+#include "dispatch.h"
 
 static int append_char(char character, void *context)
 {
@@ -77,6 +78,23 @@ int main(void)
     uint8_t decode_image[32] = {0};
     struct story_mem decode_memory;
     struct instruction instr;
+    uint8_t dispatch_a_image[64] = {0};
+    struct story_mem dispatch_a_memory;
+    struct vm_state dispatch_a_state;
+    struct vm_context dispatch_a_ctx;
+    uint16_t dispatch_a_result;
+    uint8_t dispatch_b_image[16] = {0};
+    struct story_mem dispatch_b_memory;
+    struct vm_state dispatch_b_state;
+    struct vm_context dispatch_b_ctx;
+    char dispatch_b_text[8] = "";
+    uint8_t dispatch_c_image[200] = {0};
+    struct story_mem dispatch_c_memory;
+    struct vm_state dispatch_c_state;
+    struct vm_context dispatch_c_ctx;
+    uint16_t dispatch_c_g0;
+    uint16_t dispatch_c_g1;
+    uint16_t dispatch_c_g2;
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -529,6 +547,120 @@ int main(void)
     decode_image[0] = 0x14;                    /* "add", needs 4 bytes */
     decode_image[1] = 5;
     assert(decode_instruction(&decode_memory, 0, &instr) != 0);
+
+    /* Dispatch A: call a routine with one argument, which doubles it
+     * via "add" and returns the result; the caller stores it in a
+     * global. Exercises call (including the routine-header/argument-
+     * default mechanics), variable-operand resolution, add, and
+     * ret/return. All bytes hand-derived from the encoding rules the
+     * same way as the decoder tests above. */
+    dispatch_a_image[0x10] = 1;                /* routine: 1 local */
+    dispatch_a_image[0x11] = 0x00;              /* local's default: 0 */
+    dispatch_a_image[0x12] = 0x00;
+    dispatch_a_image[0x13] = 0x74;              /* add L01,L01 -> (stack) */
+    dispatch_a_image[0x14] = 0x01;
+    dispatch_a_image[0x15] = 0x01;
+    dispatch_a_image[0x16] = 0x00;
+    dispatch_a_image[0x17] = 0xab;              /* ret (stack) */
+    dispatch_a_image[0x18] = 0x00;
+    dispatch_a_image[0x20] = 0xe0;              /* call routine($08), 5
+                                                 * -> global 16 ($10) */
+    dispatch_a_image[0x21] = 0x5f;
+    dispatch_a_image[0x22] = 0x08;
+    dispatch_a_image[0x23] = 5;
+    dispatch_a_image[0x24] = 0x10;
+    dispatch_a_image[0x25] = 0xba;              /* quit */
+
+    assert(story_mem_init(&dispatch_a_memory, dispatch_a_image,
+                          sizeof(dispatch_a_image),
+                          sizeof(dispatch_a_image)) == 0);
+    vm_state_init(&dispatch_a_state, 0, 0x20);
+    dispatch_a_ctx.memory = &dispatch_a_memory;
+    dispatch_a_ctx.state = &dispatch_a_state;
+    dispatch_a_ctx.emit = 0;
+    dispatch_a_ctx.emit_context = 0;
+    dispatch_a_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_a_ctx) == 0 && dispatch_a_state.pc == 0x13 &&
+        dispatch_a_state.frame_depth == 1);
+    assert(vm_step(&dispatch_a_ctx) == 0 && dispatch_a_state.pc == 0x17);
+    assert(vm_step(&dispatch_a_ctx) == 0 && dispatch_a_state.pc == 0x25 &&
+        dispatch_a_state.frame_depth == 0);
+    assert(story_mem_read16(&dispatch_a_memory, 0, &dispatch_a_result) == 0 &&
+        dispatch_a_result == 10);
+    assert(vm_step(&dispatch_a_ctx) == 0 && dispatch_a_ctx.quit);
+
+    /* Dispatch B: print an inline string, then a newline. Exercises
+     * 0OP print's reuse of ztext_decode and the emit callback. */
+    dispatch_b_image[0] = 0xb2;                 /* print "hi" */
+    dispatch_b_image[1] = 0x35;
+    dispatch_b_image[2] = 0xc5;
+    dispatch_b_image[3] = 0x94;
+    dispatch_b_image[4] = 0xa5;
+    dispatch_b_image[5] = 0xbb;                 /* new_line */
+    dispatch_b_image[6] = 0xba;                 /* quit */
+
+    assert(story_mem_init(&dispatch_b_memory, dispatch_b_image,
+                          sizeof(dispatch_b_image),
+                          sizeof(dispatch_b_image)) == 0);
+    vm_state_init(&dispatch_b_state, 0, 0);
+    dispatch_b_ctx.memory = &dispatch_b_memory;
+    dispatch_b_ctx.state = &dispatch_b_state;
+    dispatch_b_ctx.emit = append_char;
+    dispatch_b_ctx.emit_context = dispatch_b_text;
+    dispatch_b_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_b_ctx) == 0);
+    assert(vm_step(&dispatch_b_ctx) == 0);
+    assert(vm_step(&dispatch_b_ctx) == 0 && dispatch_b_ctx.quit);
+    assert(strcmp(dispatch_b_text, "hi\n") == 0);
+
+    /* Dispatch C: je taken (skips the next instruction) and je not
+     * taken (falls through normally). Exercises branching and the
+     * "store"opcode's own indirect variable-number operand. */
+    dispatch_c_image[0x90] = 0x01;              /* je 5,5 ?+5 */
+    dispatch_c_image[0x91] = 5;
+    dispatch_c_image[0x92] = 5;
+    dispatch_c_image[0x93] = 0xc5;
+    dispatch_c_image[0x94] = 0x0d;              /* store global16,99 --
+                                                 * skipped by the branch */
+    dispatch_c_image[0x95] = 0x10;
+    dispatch_c_image[0x96] = 99;
+    dispatch_c_image[0x97] = 0x0d;              /* store global17,1 --
+                                                 * the branch lands here */
+    dispatch_c_image[0x98] = 0x11;
+    dispatch_c_image[0x99] = 1;
+    dispatch_c_image[0x9a] = 0x01;              /* je 5,6 ?+5 (false:
+                                                 * falls through) */
+    dispatch_c_image[0x9b] = 5;
+    dispatch_c_image[0x9c] = 6;
+    dispatch_c_image[0x9d] = 0xc5;
+    dispatch_c_image[0x9e] = 0x0d;              /* store global18,1 */
+    dispatch_c_image[0x9f] = 0x12;
+    dispatch_c_image[0xa0] = 1;
+    dispatch_c_image[0xa1] = 0xba;              /* quit */
+
+    assert(story_mem_init(&dispatch_c_memory, dispatch_c_image,
+                          sizeof(dispatch_c_image),
+                          sizeof(dispatch_c_image)) == 0);
+    vm_state_init(&dispatch_c_state, 0, 0x90);
+    dispatch_c_ctx.memory = &dispatch_c_memory;
+    dispatch_c_ctx.state = &dispatch_c_state;
+    dispatch_c_ctx.emit = 0;
+    dispatch_c_ctx.emit_context = 0;
+    dispatch_c_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_c_ctx) == 0 && dispatch_c_state.pc == 0x97);
+    assert(vm_step(&dispatch_c_ctx) == 0 && dispatch_c_state.pc == 0x9a);
+    assert(vm_step(&dispatch_c_ctx) == 0 && dispatch_c_state.pc == 0x9e);
+    assert(vm_step(&dispatch_c_ctx) == 0 && dispatch_c_state.pc == 0xa1);
+    assert(vm_step(&dispatch_c_ctx) == 0 && dispatch_c_ctx.quit);
+    assert(story_mem_read16(&dispatch_c_memory, 0, &dispatch_c_g0) == 0 &&
+        dispatch_c_g0 == 0);
+    assert(story_mem_read16(&dispatch_c_memory, 2, &dispatch_c_g1) == 0 &&
+        dispatch_c_g1 == 1);
+    assert(story_mem_read16(&dispatch_c_memory, 4, &dispatch_c_g2) == 0 &&
+        dispatch_c_g2 == 1);
 
     return 0;
 }
