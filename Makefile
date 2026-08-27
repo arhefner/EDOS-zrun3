@@ -3,7 +3,7 @@ CFLAGS ?= -std=c99 -Wall -Wextra -Werror -Ihost
 
 HOST_TEST = build/test_host
 ASM ?= /opt/elfc/asm02
-ASMFLAGS ?= -I ..
+ASMFLAGS ?= -r -I ..
 LINK ?= /opt/elfc/link02
 LFLAGS ?= -b -be -r
 
@@ -11,7 +11,8 @@ HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/ztext.c host/objects.c host/properties.c host/dictionary.c \
 	host/parser.c tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
-	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg lib/zdec.prg
+	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg lib/zdec.prg \
+        lib/zinputl.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
 	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
 	diag/zdictdiag.prg diag/zdictdiag_main.prg diag/zparsediag.prg \
@@ -34,6 +35,7 @@ asm: $(ASM_MODULES)
 	@test -f lib/zparse.prg
 	@test -f lib/zterm.prg
 	@test -f lib/zdec.prg
+	@test -f lib/zinputl.prg
 
 # diag/zdiag_main, diag/zobjdiag_main, diag/zpropdiag_main,
 # diag/zdictdiag_main, diag/zparsediag_main, and diag/zdecdiag_main are
@@ -57,7 +59,7 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/zdictdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zparsediag diag/zparsediag_main.prg diag/zparsediag.prg lib/zparse.prg lib/zdict.prg
 	rm -f diag/zparsediag.lkb
-	$(LINK) $(LFLAGS) -o diag/ztermdiag diag/ztermdiag_main.prg lib/zterm.prg
+	$(LINK) $(LFLAGS) -o diag/ztermdiag diag/ztermdiag_main.prg lib/zterm.prg lib/zinputl.prg
 	rm -f diag/ztermdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zdecdiag diag/zdecdiag_main.prg diag/zdecdiag.prg lib/zdec.prg
 	rm -f diag/zdecdiag.lkb

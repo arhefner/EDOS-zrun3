@@ -3,17 +3,28 @@
 ;
 ; Narrow wrappers around the ELF-DOS kernel's own console calls, so
 ; the eventual VM core only ever depends on this interface, never on
-; K_TYPE/K_MSG/K_INPUTL directly (see docs/ARCHITECTURE.md's platform
+; K_TYPE/K_MSG/z_inputl directly (see docs/ARCHITECTURE.md's platform
 ; layer). zterm_lowercase is the one piece here with no kernel
 ; dependency, so it's the only piece a bare emulator (no kernel
 ; loaded) can verify -- print_char/print_string/read_line's own
 ; kernel-call plumbing needs the real kernel, hardware or a full boot,
 ; the same caveat zcache.asm's file I/O carries.
 ;
+; zterm_read_line is built on lib/zinputl.asm's z_inputl, a local
+; character-at-a-time line reader (K_READ plus its own echo/backspace
+; handling) written to replace the kernel's own former K_INPUTL, which
+; was removed upstream (see kernel_api.inc's own note on the removal --
+; superseded project-wide by lib/lineedit.asm's read_line_ex, but this
+; project's own narrow needs are served by the smaller z_inputl
+; instead). Unlike K_INPUTL, z_inputl has no input-redirection
+; awareness; its DF instead reports whether the user aborted the line
+; with Ctrl-C.
+;
 ; Register budget matches the rest of this project: only R7-RD and
 ; RF, no R1, no RE. Nothing here assumes any register survives a
-; kernel call -- kernel/redir.asm's own K_INPUTL dispatcher comment is
-; explicit that nothing is safe to assume preserved across it.
+; kernel call, or a call to z_inputl itself (an ordinary subroutine,
+; not a kernel call, but one this file doesn't control the internals
+; of and that makes several kernel calls of its own).
 ;
 
 #include    include/opcodes.def
@@ -21,7 +32,8 @@
 
             extrn   zterm_lowercase
             extrn   zrl_buf_addr
-            extrn   zrl_had_eof
+            extrn   zrl_had_abort
+            extrn   z_inputl
 
 ; zterm_print_char: D = character (set by the caller immediately
 ; before the call).
@@ -64,16 +76,16 @@ ztl_done:
 
 ; zterm_read_line: RD = text buffer address in the standard V3 format
 ; (byte 0 = max length, bytes 1.. filled in, lowercase, NUL-
-; terminated). Returns DF=1 if input redirection is exhausted (see
-; K_INPUTL's own doc comment in kernel_api.inc) -- never true for a
-; live keyboard, so most callers can ignore it.
+; terminated). Returns DF=1 if the user aborted the line with Ctrl-C
+; (z_inputl's own signal for that -- the buffer is still NUL-
+; terminated in that case, just short/empty rather than a real line).
             proc    zterm_read_line
             mov     r8, rd              ; r8 = text buffer address
             ldn     r8                  ; d = max length
             plo     rc
             ldi     0
             phi     rc                  ; rc = 0:max_length
-            inc     r8                  ; r8 = buffer+1 (where K_INPUTL
+            inc     r8                  ; r8 = buffer+1 (where z_inputl
                                         ; writes)
             mov     rf, zrl_buf_addr
             ghi     r8
@@ -87,18 +99,18 @@ ztl_done:
                                         ; kernel calls below
 
             mov     rf, r8
-            call    K_INPUTL            ; rf = filled buffer, df=1 if
-                                        ; redirected input is exhausted
-            lbdf    zrl_was_redirected
-            mov     rf, zrl_had_eof
+            call    z_inputl            ; rf = filled buffer, df=1 if
+                                        ; the user aborted with Ctrl-C
+            lbdf    zrl_was_aborted
+            mov     rf, zrl_had_abort
             ldi     0
             lbr     zrl_have_flag
-zrl_was_redirected:
-            mov     rf, zrl_had_eof
+zrl_was_aborted:
+            mov     rf, zrl_had_abort
             ldi     1
 zrl_have_flag:
-            str     rf                  ; zrl_had_eof = the DF
-                                        ; K_INPUTL gave us
+            str     rf                  ; zrl_had_abort = the DF
+                                        ; z_inputl gave us
 
             ldi     10                  ; the BIOS's own f_inputl only
                                         ; echoes a bare CR on Enter, no
@@ -118,7 +130,7 @@ zrl_have_flag:
                                         ; see the comment above)
             call    zterm_lowercase
 
-            mov     rf, zrl_had_eof
+            mov     rf, zrl_had_abort
             ldn     rf
             lbz     zrl_ok
             stc
@@ -130,7 +142,7 @@ zrl_ok:
 
             proc    _zterm_data
 zrl_buf_addr:   dw      0
-zrl_had_eof:    db      0
+zrl_had_abort:  db      0
                 public  zrl_buf_addr
-                public  zrl_had_eof
+                public  zrl_had_abort
             endp

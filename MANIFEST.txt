@@ -1,8 +1,8 @@
 ELF-DOS SDK snapshot
-Exported:       2026-08-26T00:04:28Z
-ELF-DOS commit: 7028bb61eb59a055a1ad523401c966316d52f958
+Exported:       2026-08-27T04:27:10Z
+ELF-DOS commit: 2fe367b63a59f51b960f404f0a373655cf0539b6
 Kernel version: 1.0
-PROG_BASE:      $4200
+PROG_BASE:      $4000
 
 Headers:
   include/kernel_api.inc

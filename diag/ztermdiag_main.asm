@@ -45,7 +45,7 @@ start:
             call    zterm_print_string
             mov     rd, zt_line_buf
             call    zterm_read_line
-            lbdf    zt_redirected
+            lbdf    zt_aborted
 
             mov     rd, zt_echo_label
             call    zterm_print_string
@@ -56,8 +56,8 @@ start:
             ldi     0
             rtn
 
-zt_redirected:
-            mov     rd, zt_redir_msg
+zt_aborted:
+            mov     rd, zt_abort_msg
             call    zterm_print_string
             ldi     1
             rtn
@@ -68,7 +68,7 @@ zt_newline:     db      13,10,0
 zt_prompt:      db      "Type something in ANY case, "
                 db      "press enter: ",0
 zt_echo_label:  db      "read back (should be all lowercase): ",0
-zt_redir_msg:   db      "input redirection reports exhausted -- ",
+zt_abort_msg:   db      "line aborted with Ctrl-C -- ",
                 db      "no line to echo.",13,10,0
 zt_line_buf:    db      63
                 ds      63
