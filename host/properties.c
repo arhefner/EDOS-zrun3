@@ -159,3 +159,29 @@ int prop_get_next(const struct story_mem *memory, uint16_t object_table,
         cursor = next;
     }
 }
+
+int prop_put(struct story_mem *memory, uint16_t object_table, uint8_t object,
+            uint8_t property, uint16_t value)
+{
+    uint16_t addr;
+    uint8_t len;
+
+    if (property == 0 || property > PROP_NUMBER_MAX ||
+        prop_get_addr(memory, object_table, object, property, &addr) !=
+            PROP_OK ||
+        addr == 0 || prop_get_len(memory, addr, &len) != PROP_OK) {
+        return PROP_ERROR;
+    }
+    if (len == 1) {
+        return story_mem_write8(memory, addr, (uint8_t)value) == 0 ?
+            PROP_OK : PROP_ERROR;
+    }
+    if (len != 2) {
+        return PROP_ERROR;
+    }
+    if (story_mem_write8(memory, addr, (uint8_t)(value >> 8)) != 0 ||
+        story_mem_write8(memory, (uint16_t)(addr + 1), (uint8_t)value) != 0) {
+        return PROP_ERROR;
+    }
+    return PROP_OK;
+}

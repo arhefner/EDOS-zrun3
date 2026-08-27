@@ -95,6 +95,32 @@ int main(void)
     uint16_t dispatch_c_g0;
     uint16_t dispatch_c_g1;
     uint16_t dispatch_c_g2;
+    uint8_t dispatch_d_image[256] = {0};
+    struct story_mem dispatch_d_memory;
+    struct vm_state dispatch_d_state;
+    struct vm_context dispatch_d_ctx;
+    uint16_t dispatch_d_g16, dispatch_d_g17, dispatch_d_g18, dispatch_d_g19;
+    uint8_t dispatch_e_image[256] = {0};
+    struct story_mem dispatch_e_memory;
+    struct vm_state dispatch_e_state;
+    struct vm_context dispatch_e_ctx;
+    uint16_t dispatch_e_g16, dispatch_e_g17, dispatch_e_g18, dispatch_e_g19;
+    uint8_t dispatch_f_image[64] = {0};
+    struct story_mem dispatch_f_memory;
+    struct vm_state dispatch_f_state;
+    struct vm_context dispatch_f_ctx;
+    uint16_t dispatch_f_g16, dispatch_f_g17;
+    uint8_t dispatch_g_image[128] = {0};
+    struct story_mem dispatch_g_memory;
+    struct vm_state dispatch_g_state;
+    struct vm_context dispatch_g_ctx;
+    uint16_t dispatch_g_g16, dispatch_g_g17, dispatch_g_g18, dispatch_g_g19;
+    uint16_t dispatch_g_g20, dispatch_g_g21, dispatch_g_g22;
+    uint8_t dispatch_h_image[64] = {0};
+    struct story_mem dispatch_h_memory;
+    struct vm_state dispatch_h_state;
+    struct vm_context dispatch_h_ctx;
+    char dispatch_h_text[8] = "";
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -255,6 +281,14 @@ int main(void)
     assert(prop_get_next(&obj_memory, OBJECT_TABLE, 2, 0, &obj_num) == 0 &&
         obj_num == 0);
     assert(prop_get_next(&obj_memory, OBJECT_TABLE, 1, 9, &obj_num) != 0);
+
+    assert(prop_put(&obj_memory, OBJECT_TABLE, 1, 5, 0x77) == 0);
+    assert(prop_get(&obj_memory, OBJECT_TABLE, 1, 5, &prop_value) == 0 &&
+        prop_value == 0x77);
+    assert(prop_put(&obj_memory, OBJECT_TABLE, 1, 3, 0x9abc) == 0);
+    assert(prop_get(&obj_memory, OBJECT_TABLE, 1, 3, &prop_value) == 0 &&
+        prop_value == 0x9abc);
+    assert(prop_put(&obj_memory, OBJECT_TABLE, 1, 9, 1) != 0);   /* absent */
 
     /* ztext_encode: hand-verified against the V3 z-char tables --
      * 'c'=8, 'a'=6, 't'=25, then three padding (5) z-chars:
@@ -577,6 +611,7 @@ int main(void)
     vm_state_init(&dispatch_a_state, 0, 0x20);
     dispatch_a_ctx.memory = &dispatch_a_memory;
     dispatch_a_ctx.state = &dispatch_a_state;
+    dispatch_a_ctx.object_table = 0;
     dispatch_a_ctx.emit = 0;
     dispatch_a_ctx.emit_context = 0;
     dispatch_a_ctx.quit = 0;
@@ -606,6 +641,7 @@ int main(void)
     vm_state_init(&dispatch_b_state, 0, 0);
     dispatch_b_ctx.memory = &dispatch_b_memory;
     dispatch_b_ctx.state = &dispatch_b_state;
+    dispatch_b_ctx.object_table = 0;
     dispatch_b_ctx.emit = append_char;
     dispatch_b_ctx.emit_context = dispatch_b_text;
     dispatch_b_ctx.quit = 0;
@@ -646,6 +682,7 @@ int main(void)
     vm_state_init(&dispatch_c_state, 0, 0x90);
     dispatch_c_ctx.memory = &dispatch_c_memory;
     dispatch_c_ctx.state = &dispatch_c_state;
+    dispatch_c_ctx.object_table = 0;
     dispatch_c_ctx.emit = 0;
     dispatch_c_ctx.emit_context = 0;
     dispatch_c_ctx.quit = 0;
@@ -661,6 +698,314 @@ int main(void)
         dispatch_c_g1 == 1);
     assert(story_mem_read16(&dispatch_c_memory, 4, &dispatch_c_g2) == 0 &&
         dispatch_c_g2 == 1);
+
+    /* Dispatch D: object tree + attributes. Same object-1/2/3 layout as
+     * the top-of-file object/property tests, in a fresh image. Exercises
+     * set_attr/test_attr (with its branch), insert_obj, get_parent, and
+     * get_child (with its own store+branch). All bytes hand-derived
+     * (variable form throughout: 0xC0|opcode for 2OP, type byte 0x5f =
+     * small,small,omitted,omitted) and cross-checked against a scratch
+     * harness driving the real vm_step before being copied here. */
+    dispatch_d_image[68] = 2;                  /* object 1: child = 2 */
+    dispatch_d_image[70] = 0x64;               /* object 1: proptable @ 100 */
+    dispatch_d_image[75] = 1;                  /* object 2: parent = 1 */
+    dispatch_d_image[76] = 3;                  /* object 2: sibling = 3 */
+    dispatch_d_image[79] = 0x6e;               /* object 2: proptable @ 110 */
+    dispatch_d_image[84] = 1;                  /* object 3: parent = 1 */
+    dispatch_d_image[88] = 0x73;               /* object 3: proptable @ 115 */
+    dispatch_d_image[100] = 0;                 /* object 1: empty proplist */
+    dispatch_d_image[110] = 0;                 /* object 2: empty proplist */
+    dispatch_d_image[115] = 0;                 /* object 3: empty proplist */
+
+    dispatch_d_image[0x90] = 0xcb;             /* set_attr 1,3 */
+    dispatch_d_image[0x91] = 0x5f;
+    dispatch_d_image[0x92] = 1;
+    dispatch_d_image[0x93] = 3;
+    dispatch_d_image[0x94] = 0xca;             /* test_attr 1,3 ?+6 */
+    dispatch_d_image[0x95] = 0x5f;
+    dispatch_d_image[0x96] = 1;
+    dispatch_d_image[0x97] = 3;
+    dispatch_d_image[0x98] = 0xc6;
+    dispatch_d_image[0x99] = 0xcd;             /* store g16,99 -- skipped */
+    dispatch_d_image[0x9a] = 0x5f;
+    dispatch_d_image[0x9b] = 0x10;
+    dispatch_d_image[0x9c] = 99;
+    dispatch_d_image[0x9d] = 0xcd;             /* store g17,1 -- branch lands here */
+    dispatch_d_image[0x9e] = 0x5f;
+    dispatch_d_image[0x9f] = 0x11;
+    dispatch_d_image[0xa0] = 1;
+    dispatch_d_image[0xa1] = 0xce;             /* insert_obj 3,2 */
+    dispatch_d_image[0xa2] = 0x5f;
+    dispatch_d_image[0xa3] = 3;
+    dispatch_d_image[0xa4] = 2;
+    dispatch_d_image[0xa5] = 0x93;             /* get_parent 3 -> g18 */
+    dispatch_d_image[0xa6] = 3;
+    dispatch_d_image[0xa7] = 0x12;
+    dispatch_d_image[0xa8] = 0x92;             /* get_child 2 ?+2 -> g19 */
+    dispatch_d_image[0xa9] = 2;
+    dispatch_d_image[0xaa] = 0x13;
+    dispatch_d_image[0xab] = 0xc2;
+    dispatch_d_image[0xac] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_d_memory, dispatch_d_image,
+                          sizeof(dispatch_d_image),
+                          sizeof(dispatch_d_image)) == 0);
+    vm_state_init(&dispatch_d_state, 0, 0x90);
+    dispatch_d_ctx.memory = &dispatch_d_memory;
+    dispatch_d_ctx.state = &dispatch_d_state;
+    dispatch_d_ctx.object_table = 0;
+    dispatch_d_ctx.emit = 0;
+    dispatch_d_ctx.emit_context = 0;
+    dispatch_d_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_state.pc == 0x94);
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_state.pc == 0x9d);
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_state.pc == 0xa1);
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_state.pc == 0xa5);
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_state.pc == 0xa8);
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_state.pc == 0xac);
+    assert(vm_step(&dispatch_d_ctx) == 0 && dispatch_d_ctx.quit);
+    assert(story_mem_read16(&dispatch_d_memory, 0, &dispatch_d_g16) == 0 &&
+        dispatch_d_g16 == 0);
+    assert(story_mem_read16(&dispatch_d_memory, 2, &dispatch_d_g17) == 0 &&
+        dispatch_d_g17 == 1);
+    assert(story_mem_read16(&dispatch_d_memory, 4, &dispatch_d_g18) == 0 &&
+        dispatch_d_g18 == 2);           /* object 3's parent is now 2 */
+    assert(story_mem_read16(&dispatch_d_memory, 6, &dispatch_d_g19) == 0 &&
+        dispatch_d_g19 == 3);           /* object 2's child is now 3 */
+
+    /* Dispatch E: properties. Object 1 has property 5 (len 1, =0x99)
+     * and property 3 (len 2, =0x1234), same layout as the top-of-file
+     * property tests. Exercises get_prop, put_prop, get_prop_addr, and
+     * get_next_prop. */
+    dispatch_e_image[70] = 0x64;               /* object 1: proptable @ 100 */
+    dispatch_e_image[100] = 0;                 /* no short name */
+    dispatch_e_image[101] = 0x05;              /* property 5, len 1 */
+    dispatch_e_image[102] = 0x99;
+    dispatch_e_image[103] = 0x23;              /* property 3, len 2 */
+    dispatch_e_image[104] = 0x12;
+    dispatch_e_image[105] = 0x34;
+    dispatch_e_image[106] = 0x00;              /* end of properties */
+
+    dispatch_e_image[0x90] = 0xd1;             /* get_prop 1,5 -> g16 */
+    dispatch_e_image[0x91] = 0x5f;
+    dispatch_e_image[0x92] = 1;
+    dispatch_e_image[0x93] = 5;
+    dispatch_e_image[0x94] = 0x10;
+    dispatch_e_image[0x95] = 0xe3;             /* put_prop 1,5,0x55 */
+    dispatch_e_image[0x96] = 0x53;
+    dispatch_e_image[0x97] = 1;
+    dispatch_e_image[0x98] = 5;
+    dispatch_e_image[0x99] = 0x00;
+    dispatch_e_image[0x9a] = 0x55;
+    dispatch_e_image[0x9b] = 0xd1;             /* get_prop 1,5 -> g17 */
+    dispatch_e_image[0x9c] = 0x5f;
+    dispatch_e_image[0x9d] = 1;
+    dispatch_e_image[0x9e] = 5;
+    dispatch_e_image[0x9f] = 0x11;
+    dispatch_e_image[0xa0] = 0xd2;             /* get_prop_addr 1,3 -> g18 */
+    dispatch_e_image[0xa1] = 0x5f;
+    dispatch_e_image[0xa2] = 1;
+    dispatch_e_image[0xa3] = 3;
+    dispatch_e_image[0xa4] = 0x12;
+    dispatch_e_image[0xa5] = 0xd3;             /* get_next_prop 1,0 -> g19 */
+    dispatch_e_image[0xa6] = 0x5f;
+    dispatch_e_image[0xa7] = 1;
+    dispatch_e_image[0xa8] = 0;
+    dispatch_e_image[0xa9] = 0x13;
+    dispatch_e_image[0xaa] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_e_memory, dispatch_e_image,
+                          sizeof(dispatch_e_image),
+                          sizeof(dispatch_e_image)) == 0);
+    vm_state_init(&dispatch_e_state, 0, 0x90);
+    dispatch_e_ctx.memory = &dispatch_e_memory;
+    dispatch_e_ctx.state = &dispatch_e_state;
+    dispatch_e_ctx.object_table = 0;
+    dispatch_e_ctx.emit = 0;
+    dispatch_e_ctx.emit_context = 0;
+    dispatch_e_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_e_ctx) == 0 && dispatch_e_state.pc == 0x95);
+    assert(vm_step(&dispatch_e_ctx) == 0 && dispatch_e_state.pc == 0x9b);
+    assert(vm_step(&dispatch_e_ctx) == 0 && dispatch_e_state.pc == 0xa0);
+    assert(vm_step(&dispatch_e_ctx) == 0 && dispatch_e_state.pc == 0xa5);
+    assert(vm_step(&dispatch_e_ctx) == 0 && dispatch_e_state.pc == 0xaa);
+    assert(vm_step(&dispatch_e_ctx) == 0 && dispatch_e_ctx.quit);
+    assert(story_mem_read16(&dispatch_e_memory, 0, &dispatch_e_g16) == 0 &&
+        dispatch_e_g16 == 0x99);
+    assert(story_mem_read16(&dispatch_e_memory, 2, &dispatch_e_g17) == 0 &&
+        dispatch_e_g17 == 0x55);
+    assert(story_mem_read16(&dispatch_e_memory, 4, &dispatch_e_g18) == 0 &&
+        dispatch_e_g18 == 104);
+    assert(story_mem_read16(&dispatch_e_memory, 6, &dispatch_e_g19) == 0 &&
+        dispatch_e_g19 == 5);
+
+    /* Dispatch F: memory access. Exercises storew/loadw and
+     * storeb/loadb against the same base address. */
+    dispatch_f_image[0x20] = 0xe1;             /* storew 0,2,0x1234 */
+    dispatch_f_image[0x21] = 0x53;
+    dispatch_f_image[0x22] = 0;
+    dispatch_f_image[0x23] = 2;
+    dispatch_f_image[0x24] = 0x12;
+    dispatch_f_image[0x25] = 0x34;
+    dispatch_f_image[0x26] = 0xcf;             /* loadw 0,2 -> g16 */
+    dispatch_f_image[0x27] = 0x5f;
+    dispatch_f_image[0x28] = 0;
+    dispatch_f_image[0x29] = 2;
+    dispatch_f_image[0x2a] = 0x10;
+    dispatch_f_image[0x2b] = 0xe2;             /* storeb 0,9,0x42 */
+    dispatch_f_image[0x2c] = 0x57;
+    dispatch_f_image[0x2d] = 0;
+    dispatch_f_image[0x2e] = 9;
+    dispatch_f_image[0x2f] = 0x42;
+    dispatch_f_image[0x30] = 0xd0;             /* loadb 0,9 -> g17 */
+    dispatch_f_image[0x31] = 0x5f;
+    dispatch_f_image[0x32] = 0;
+    dispatch_f_image[0x33] = 9;
+    dispatch_f_image[0x34] = 0x11;
+    dispatch_f_image[0x35] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_f_memory, dispatch_f_image,
+                          sizeof(dispatch_f_image),
+                          sizeof(dispatch_f_image)) == 0);
+    vm_state_init(&dispatch_f_state, 0, 0x20);
+    dispatch_f_ctx.memory = &dispatch_f_memory;
+    dispatch_f_ctx.state = &dispatch_f_state;
+    dispatch_f_ctx.object_table = 0;
+    dispatch_f_ctx.emit = 0;
+    dispatch_f_ctx.emit_context = 0;
+    dispatch_f_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_f_ctx) == 0 && dispatch_f_state.pc == 0x26);
+    assert(vm_step(&dispatch_f_ctx) == 0 && dispatch_f_state.pc == 0x2b);
+    assert(vm_step(&dispatch_f_ctx) == 0 && dispatch_f_state.pc == 0x30);
+    assert(vm_step(&dispatch_f_ctx) == 0 && dispatch_f_state.pc == 0x35);
+    assert(vm_step(&dispatch_f_ctx) == 0 && dispatch_f_ctx.quit);
+    assert(story_mem_read16(&dispatch_f_memory, 0, &dispatch_f_g16) == 0 &&
+        dispatch_f_g16 == 0x1234);
+    assert(story_mem_read16(&dispatch_f_memory, 2, &dispatch_f_g17) == 0 &&
+        dispatch_f_g17 == 0x42);
+
+    /* Dispatch G: stack/variable-indirect ops and arithmetic. Exercises
+     * push/pull, inc/dec_chk (both using their variable-NUMBER operand
+     * indirectly), and mul/div/mod. */
+    dispatch_g_image[0x20] = 0xe8;             /* push 0x77 */
+    dispatch_g_image[0x21] = 0x7f;
+    dispatch_g_image[0x22] = 0x77;
+    dispatch_g_image[0x23] = 0xe9;             /* pull 16 */
+    dispatch_g_image[0x24] = 0x7f;
+    dispatch_g_image[0x25] = 0x10;
+    dispatch_g_image[0x26] = 0xcd;             /* store g17,5 */
+    dispatch_g_image[0x27] = 0x5f;
+    dispatch_g_image[0x28] = 0x11;
+    dispatch_g_image[0x29] = 5;
+    dispatch_g_image[0x2a] = 0x95;             /* inc 17 (-> 6) */
+    dispatch_g_image[0x2b] = 0x11;
+    dispatch_g_image[0x2c] = 0xc4;             /* dec_chk 17,10 ?+6 (-> 5, 5<10 true) */
+    dispatch_g_image[0x2d] = 0x5f;
+    dispatch_g_image[0x2e] = 0x11;
+    dispatch_g_image[0x2f] = 10;
+    dispatch_g_image[0x30] = 0xc6;
+    dispatch_g_image[0x31] = 0xcd;             /* store g18,99 -- skipped */
+    dispatch_g_image[0x32] = 0x5f;
+    dispatch_g_image[0x33] = 0x12;
+    dispatch_g_image[0x34] = 99;
+    dispatch_g_image[0x35] = 0xcd;             /* store g19,1 -- branch lands here */
+    dispatch_g_image[0x36] = 0x5f;
+    dispatch_g_image[0x37] = 0x13;
+    dispatch_g_image[0x38] = 1;
+    dispatch_g_image[0x39] = 0xd6;             /* mul 6,7 -> g20 */
+    dispatch_g_image[0x3a] = 0x5f;
+    dispatch_g_image[0x3b] = 6;
+    dispatch_g_image[0x3c] = 7;
+    dispatch_g_image[0x3d] = 0x14;
+    dispatch_g_image[0x3e] = 0xd7;             /* div 20,6 -> g21 */
+    dispatch_g_image[0x3f] = 0x5f;
+    dispatch_g_image[0x40] = 20;
+    dispatch_g_image[0x41] = 6;
+    dispatch_g_image[0x42] = 0x15;
+    dispatch_g_image[0x43] = 0xd8;             /* mod 20,6 -> g22 */
+    dispatch_g_image[0x44] = 0x5f;
+    dispatch_g_image[0x45] = 20;
+    dispatch_g_image[0x46] = 6;
+    dispatch_g_image[0x47] = 0x16;
+    dispatch_g_image[0x48] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_g_memory, dispatch_g_image,
+                          sizeof(dispatch_g_image),
+                          sizeof(dispatch_g_image)) == 0);
+    vm_state_init(&dispatch_g_state, 0, 0x20);
+    dispatch_g_ctx.memory = &dispatch_g_memory;
+    dispatch_g_ctx.state = &dispatch_g_state;
+    dispatch_g_ctx.object_table = 0;
+    dispatch_g_ctx.emit = 0;
+    dispatch_g_ctx.emit_context = 0;
+    dispatch_g_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x23);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x26);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x2a);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x2c);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x35);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x39);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x3e);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x43);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_state.pc == 0x48);
+    assert(vm_step(&dispatch_g_ctx) == 0 && dispatch_g_ctx.quit);
+    assert(story_mem_read16(&dispatch_g_memory, 0, &dispatch_g_g16) == 0 &&
+        dispatch_g_g16 == 0x77);
+    assert(story_mem_read16(&dispatch_g_memory, 2, &dispatch_g_g17) == 0 &&
+        dispatch_g_g17 == 5);
+    assert(story_mem_read16(&dispatch_g_memory, 4, &dispatch_g_g18) == 0 &&
+        dispatch_g_g18 == 0);
+    assert(story_mem_read16(&dispatch_g_memory, 6, &dispatch_g_g19) == 0 &&
+        dispatch_g_g19 == 1);
+    assert(story_mem_read16(&dispatch_g_memory, 8, &dispatch_g_g20) == 0 &&
+        dispatch_g_g20 == 42);
+    assert(story_mem_read16(&dispatch_g_memory, 10, &dispatch_g_g21) == 0 &&
+        dispatch_g_g21 == 3);
+    assert(story_mem_read16(&dispatch_g_memory, 12, &dispatch_g_g22) == 0 &&
+        dispatch_g_g22 == 2);
+
+    /* Dispatch H: text. print_char, print_num, print_addr, and
+     * print_paddr -- the last two both targeting the same "hi" bytes
+     * reused from the ztext_decode test (byte address 8, packed
+     * address 4). */
+    dispatch_h_image[8] = 0x35;
+    dispatch_h_image[9] = 0xc5;
+    dispatch_h_image[10] = 0x94;
+    dispatch_h_image[11] = 0xa5;
+
+    dispatch_h_image[0x20] = 0xe5;             /* print_char 'A' */
+    dispatch_h_image[0x21] = 0x7f;
+    dispatch_h_image[0x22] = 'A';
+    dispatch_h_image[0x23] = 0xe6;             /* print_num 42 */
+    dispatch_h_image[0x24] = 0x7f;
+    dispatch_h_image[0x25] = 42;
+    dispatch_h_image[0x26] = 0x97;             /* print_addr 8 */
+    dispatch_h_image[0x27] = 8;
+    dispatch_h_image[0x28] = 0x9d;             /* print_paddr 4 */
+    dispatch_h_image[0x29] = 4;
+    dispatch_h_image[0x2a] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_h_memory, dispatch_h_image,
+                          sizeof(dispatch_h_image),
+                          sizeof(dispatch_h_image)) == 0);
+    vm_state_init(&dispatch_h_state, 0, 0x20);
+    dispatch_h_ctx.memory = &dispatch_h_memory;
+    dispatch_h_ctx.state = &dispatch_h_state;
+    dispatch_h_ctx.object_table = 0;
+    dispatch_h_ctx.emit = append_char;
+    dispatch_h_ctx.emit_context = dispatch_h_text;
+    dispatch_h_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_h_ctx) == 0);
+    assert(vm_step(&dispatch_h_ctx) == 0);
+    assert(vm_step(&dispatch_h_ctx) == 0);
+    assert(vm_step(&dispatch_h_ctx) == 0);
+    assert(vm_step(&dispatch_h_ctx) == 0 && dispatch_h_ctx.quit);
+    assert(strcmp(dispatch_h_text, "A42hihi") == 0);
 
     return 0;
 }

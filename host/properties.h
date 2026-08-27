@@ -27,4 +27,14 @@ int prop_get(const struct story_mem *memory, uint16_t object_table,
 int prop_get_next(const struct story_mem *memory, uint16_t object_table,
                   uint8_t object, uint8_t property, uint8_t *next_property);
 
+/* Sets an EXISTING property to `value` -- put_prop never creates a
+ * new property, only the game's own compiled property table does
+ * that, matching the opcode's own spec ("It is illegal to try to
+ * write a property the object does not have"). Errors if the object
+ * has no such property, or if the property is longer than 2 bytes (a
+ * caller wanting a longer property has to reach for storeb/storew
+ * against prop_get_addr's own address instead). */
+int prop_put(struct story_mem *memory, uint16_t object_table, uint8_t object,
+            uint8_t property, uint16_t value);
+
 #endif
