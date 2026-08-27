@@ -9,6 +9,7 @@
 #include "properties.h"
 #include "dictionary.h"
 #include "parser.h"
+#include "decode.h"
 
 static int append_char(char character, void *context)
 {
@@ -68,6 +69,14 @@ int main(void)
     size_t parser_index;
     uint8_t parser_byte;
     uint16_t parse_word;
+    uint8_t var_image[64] = {0};
+    struct story_mem var_memory;
+    struct vm_state var_state;
+    uint16_t var_value;
+    uint16_t var_locals[] = {0xaaaa, 0xbbbb};
+    uint8_t decode_image[32] = {0};
+    struct story_mem decode_memory;
+    struct instruction instr;
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -377,6 +386,149 @@ int main(void)
                            &parser_byte) == 0 && parser_byte == 3);
     assert(story_mem_read8(&parser_memory, PARSER_PARSE_ADDR + 17,
                            &parser_byte) == 0 && parser_byte == 12);
+
+    /* Variable access: variable 0 is the stack (operand access pops/
+     * pushes it; indirect access peeks/replaces in place), 1-15 are
+     * the current frame's locals, 16-255 are globals in story memory. */
+    assert(story_mem_init(&var_memory, var_image, sizeof(var_image),
+                          sizeof(var_image)) == 0);
+    vm_state_init(&var_state, 0, 0x100);
+
+    assert(vm_write_variable(&var_state, &var_memory, 0, 0x1234) == 0 &&
+        var_state.eval_depth == 1);
+    assert(vm_read_variable(&var_state, &var_memory, 0, &var_value) == 0 &&
+        var_value == 0x1234 && var_state.eval_depth == 0);
+
+    assert(vm_frame_push(&var_state, 0x200, 0, 2, var_locals, 2) == 0);
+    assert(vm_read_variable(&var_state, &var_memory, 1, &var_value) == 0 &&
+        var_value == 0xaaaa);
+    assert(vm_write_variable(&var_state, &var_memory, 2, 0xcccc) == 0);
+    assert(vm_read_variable(&var_state, &var_memory, 2, &var_value) == 0 &&
+        var_value == 0xcccc);
+    assert(vm_read_variable(&var_state, &var_memory, 3, &var_value) != 0);
+
+    assert(vm_write_variable(&var_state, &var_memory, 16, 0x5678) == 0);
+    assert(vm_read_variable(&var_state, &var_memory, 16, &var_value) == 0 &&
+        var_value == 0x5678);
+    assert(story_mem_read16(&var_memory, 0, &var_value) == 0 &&
+        var_value == 0x5678);
+
+    assert(vm_push(&var_state, 0x9999) == 0);
+    assert(vm_read_variable_indirect(&var_state, &var_memory, 0,
+                                     &var_value) == 0 &&
+        var_value == 0x9999 && var_state.eval_depth == 1);
+    assert(vm_write_variable_indirect(&var_state, &var_memory, 0,
+                                      0x8888) == 0 &&
+        var_state.eval_depth == 1);
+    assert(vm_pop(&var_state, &var_value) == 0 && var_value == 0x8888);
+    assert(vm_read_variable_indirect(&var_state, &var_memory, 0,
+                                     &var_value) != 0);
+
+    assert(vm_frame_pop(&var_state, &frame) == 0);
+    assert(vm_read_variable(&var_state, &var_memory, 1, &var_value) != 0);
+
+    /* Decoder: each instruction below was hand-derived from the V3
+     * encoding rules and cross-checked bit by bit, not just eyeballed. */
+    assert(story_mem_init(&decode_memory, decode_image, sizeof(decode_image),
+                          sizeof(decode_image)) == 0);
+
+    /* long form, 2OP:20 "add", two small constants, stores: opcode
+     * byte $14 (00 010100: long form, both operands small const,
+     * opcode 20), operands 5 and 3, store variable $10 */
+    decode_image[0] = 0x14;
+    decode_image[1] = 5;
+    decode_image[2] = 3;
+    decode_image[3] = 0x10;
+    assert(decode_instruction(&decode_memory, 0, &instr) == 0);
+    assert(instr.form == FORM_LONG && instr.category == CATEGORY_2OP &&
+        instr.opcode == 20);
+    assert(instr.operand_count == 2 &&
+        instr.operand_types[0] == OPERAND_SMALL &&
+        instr.operand_types[1] == OPERAND_SMALL &&
+        instr.operands[0] == 5 && instr.operands[1] == 3);
+    assert(instr.stores && instr.store_variable == 0x10);
+    assert(!instr.branches && !instr.has_text);
+    assert(instr.length == 4);
+
+    /* short form, 1OP:0 "jz", one variable operand, branches: opcode
+     * byte $A0 (10 10 0000: short form, operand type variable,
+     * opcode 0), operand = variable 5, then a single-byte branch (on
+     * true, offset 10): $CA (11 001010) */
+    decode_image[0] = 0xa0;
+    decode_image[1] = 5;
+    decode_image[2] = 0xca;
+    assert(decode_instruction(&decode_memory, 0, &instr) == 0);
+    assert(instr.form == FORM_SHORT && instr.category == CATEGORY_1OP &&
+        instr.opcode == 0);
+    assert(instr.operand_count == 1 &&
+        instr.operand_types[0] == OPERAND_VARIABLE &&
+        instr.operands[0] == 5);
+    assert(!instr.stores);
+    assert(instr.branches && instr.branch_on_true && instr.branch_offset == 10);
+    assert(instr.length == 3);
+
+    /* variable form, VAR:0 "call", stores: opcode byte $E0 (11 1 00000:
+     * variable form, VAR category, opcode 0), operand types byte $1F
+     * (00 01 11 11: large, small, omitted, omitted), operands $0800
+     * and 7, store variable $11 */
+    decode_image[0] = 0xe0;
+    decode_image[1] = 0x1f;
+    decode_image[2] = 0x08;
+    decode_image[3] = 0x00;
+    decode_image[4] = 7;
+    decode_image[5] = 0x11;
+    assert(decode_instruction(&decode_memory, 0, &instr) == 0);
+    assert(instr.form == FORM_VARIABLE && instr.category == CATEGORY_VAR &&
+        instr.opcode == 0);
+    assert(instr.operand_count == 2 &&
+        instr.operand_types[0] == OPERAND_LARGE &&
+        instr.operand_types[1] == OPERAND_SMALL &&
+        instr.operands[0] == 0x0800 && instr.operands[1] == 7);
+    assert(instr.stores && instr.store_variable == 0x11);
+    assert(instr.length == 6);
+
+    /* short form, 0OP:2 "print", carries an inline packed string --
+     * reuses the exact "hello" bytes from the ztext_decode test above */
+    decode_image[0] = 0xb2;
+    decode_image[1] = 0x35;
+    decode_image[2] = 0x51;
+    decode_image[3] = 0xc6;
+    decode_image[4] = 0x85;
+    assert(decode_instruction(&decode_memory, 0, &instr) == 0);
+    assert(instr.form == FORM_SHORT && instr.category == CATEGORY_0OP &&
+        instr.opcode == 2);
+    assert(instr.operand_count == 0 && !instr.stores && !instr.branches);
+    assert(instr.has_text);
+    assert(instr.length == 5);
+
+    /* long form, 2OP:4 "dec_chk", both operands variables, branches
+     * with a two-byte offset of -50: opcode byte $64 (01 1 00100:
+     * long form, both operands variable, opcode 4), operands =
+     * variables 5 and 6, branch bytes $3F,$CE (on false, two-byte
+     * form, 14-bit value $3FCE = 16334, sign-extends to -50) */
+    decode_image[0] = 0x64;
+    decode_image[1] = 5;
+    decode_image[2] = 6;
+    decode_image[3] = 0x3f;
+    decode_image[4] = 0xce;
+    assert(decode_instruction(&decode_memory, 0, &instr) == 0);
+    assert(instr.form == FORM_LONG && instr.category == CATEGORY_2OP &&
+        instr.opcode == 4);
+    assert(instr.operand_count == 2 &&
+        instr.operand_types[0] == OPERAND_VARIABLE &&
+        instr.operand_types[1] == OPERAND_VARIABLE &&
+        instr.operands[0] == 5 && instr.operands[1] == 6);
+    assert(!instr.stores);
+    assert(instr.branches && !instr.branch_on_true &&
+        instr.branch_offset == -50);
+    assert(instr.length == 5);
+
+    /* a truncated instruction (operand runs past the story's own
+     * length) is a decode error, not a crash */
+    assert(story_mem_init(&decode_memory, decode_image, 2, 2) == 0);
+    decode_image[0] = 0x14;                    /* "add", needs 4 bytes */
+    decode_image[1] = 5;
+    assert(decode_instruction(&decode_memory, 0, &instr) != 0);
 
     return 0;
 }
