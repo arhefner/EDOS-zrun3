@@ -12,13 +12,13 @@ HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/parser.c host/decode.c host/dispatch.c tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
 	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg lib/zdec.prg \
-        lib/zinputl.prg lib/zdecode.prg
+        lib/zinputl.prg lib/zdecode.prg lib/zvar.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
 	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
 	diag/zdictdiag.prg diag/zdictdiag_main.prg diag/zparsediag.prg \
 	diag/zparsediag_main.prg diag/ztermdiag.prg diag/ztermdiag_main.prg \
 	diag/zdecdiag.prg diag/zdecdiag_main.prg diag/zdecodediag.prg \
-	diag/zdecodediag_main.prg
+	diag/zdecodediag_main.prg diag/zvardiag.prg diag/zvardiag_main.prg
 
 .PHONY: all test asm diag clean
 
@@ -38,14 +38,16 @@ asm: $(ASM_MODULES)
 	@test -f lib/zdec.prg
 	@test -f lib/zinputl.prg
 	@test -f lib/zdecode.prg
+	@test -f lib/zvar.prg
 
 # diag/zdiag_main, diag/zobjdiag_main, diag/zpropdiag_main,
-# diag/zdictdiag_main, diag/zparsediag_main, diag/zdecdiag_main, and
-# diag/zdecodediag_main are ELF-DOS front ends for zdiag.asm/
-# zobjdiag.asm/zpropdiag.asm/zdictdiag.asm/zparsediag.asm/zdecdiag.asm/
-# zdecodediag.asm's checks against the resident memory/stack,
-# object/attribute, property, dictionary, tokenizer, Z-text decoder,
-# and instruction decoder primitives (see docs/ARCHITECTURE.md's
+# diag/zdictdiag_main, diag/zparsediag_main, diag/zdecdiag_main,
+# diag/zdecodediag_main, and diag/zvardiag_main are ELF-DOS front ends
+# for zdiag.asm/zobjdiag.asm/zpropdiag.asm/zdictdiag.asm/
+# zparsediag.asm/zdecdiag.asm/zdecodediag.asm/zvardiag.asm's checks
+# against the resident memory/stack, object/attribute, property,
+# dictionary, tokenizer, Z-text decoder, instruction decoder, and
+# call-frame/variable-access primitives (see docs/ARCHITECTURE.md's
 # "diagnostic dispatch loop" step) -- run them on hardware or under an
 # emulator with the real ELF-DOS kernel loaded; K_MSG/K_INMSG have
 # nothing to call otherwise.
@@ -68,6 +70,8 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/zdecdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zdecodediag diag/zdecodediag_main.prg diag/zdecodediag.prg lib/zdecode.prg lib/zmem.prg
 	rm -f diag/zdecodediag.lkb
+	$(LINK) $(LFLAGS) -o diag/zvardiag diag/zvardiag_main.prg diag/zvardiag.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg
+	rm -f diag/zvardiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def
 	cd lib && $(ASM) $(ASMFLAGS) $*.asm
@@ -85,4 +89,4 @@ clean:
 	rm -rf build
 	rm -f $(ASM_MODULES) $(ASM_MODULES:.prg=.build) $(ASM_MODULES:.prg=.lst)
 	rm -f $(DIAG_MODULES) $(DIAG_MODULES:.prg=.build) $(DIAG_MODULES:.prg=.lst)
-	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb diag/zparsediag diag/zparsediag.lkb diag/ztermdiag diag/ztermdiag.lkb diag/zdecdiag diag/zdecdiag.lkb diag/zdecodediag diag/zdecodediag.lkb
+	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb diag/zparsediag diag/zparsediag.lkb diag/ztermdiag diag/ztermdiag.lkb diag/zdecdiag diag/zdecdiag.lkb diag/zdecodediag diag/zdecodediag.lkb diag/zvardiag diag/zvardiag.lkb
