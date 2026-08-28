@@ -1,6 +1,7 @@
 #include "vm_state.h"
 
 #include <string.h>
+#include <time.h>
 
 void vm_state_init(struct vm_state *state, uint16_t globals_base,
                    uint16_t initial_pc)
@@ -8,6 +9,7 @@ void vm_state_init(struct vm_state *state, uint16_t globals_base,
     memset(state, 0, sizeof(*state));
     state->globals_base = globals_base;
     state->pc = initial_pc;
+    state->random_state = 0x2545f491u;
 }
 
 int vm_push(struct vm_state *state, uint16_t value)
@@ -156,4 +158,31 @@ int vm_write_variable_indirect(struct vm_state *state,
         return 0;
     }
     return vm_write_variable(state, memory, variable, value);
+}
+
+static uint32_t xorshift32(uint32_t *state)
+{
+    uint32_t x = *state;
+
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    *state = x;
+    return x;
+}
+
+uint16_t vm_random(struct vm_state *state, int16_t range)
+{
+    if (range > 0) {
+        return (uint16_t)(1 + xorshift32(&state->random_state) %
+                          (uint32_t)range);
+    }
+    if (range == 0) {
+        state->random_state = (uint32_t)time(0) | 1u;  /* xorshift32 never
+                                                         * advances from an
+                                                         * all-zero state */
+    } else {
+        state->random_state = (uint32_t)(-(int32_t)range) | 1u;
+    }
+    return 0;
 }

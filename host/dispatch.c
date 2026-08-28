@@ -2,6 +2,7 @@
 
 #include "decode.h"
 #include "objects.h"
+#include "parser.h"
 #include "properties.h"
 
 enum { VM_OK = 0, VM_ERROR = -1 };
@@ -96,6 +97,32 @@ static int store_result(struct vm_context *ctx, uint8_t variable,
         VM_OK : VM_ERROR;
 }
 
+/* Every character a "print"-family opcode produces funnels through
+ * here, so "output_stream(3, table)" can redirect it into a memory
+ * table instead of ctx->emit -- matching the Z-machine standard's
+ * "any output produced is not seen ... in the current stream" wording
+ * for a redirected stream. vm_emit_wrapper adapts this to ztext_decode's
+ * own emit_fn shape for the print-family opcodes that decode z-text. */
+static int vm_emit(struct vm_context *ctx, char c)
+{
+    if (ctx->output_table_active) {
+        uint16_t addr = (uint16_t)(ctx->output_table + 2 +
+                                   ctx->output_table_count);
+
+        if (story_mem_write8(ctx->memory, addr, (uint8_t)c) != 0) {
+            return -1;
+        }
+        ++ctx->output_table_count;
+        return 0;
+    }
+    return ctx->emit(c, ctx->emit_context);
+}
+
+static int vm_emit_wrapper(char c, void *context)
+{
+    return vm_emit(context, c);
+}
+
 /* print_addr/print_paddr/print_obj don't know their string's length up
  * front the way decode_instruction measures an inline one -- pass a
  * generous bound (everything left in the story) and let ztext_decode's
@@ -108,8 +135,8 @@ static int print_ztext_at(struct vm_context *ctx, uint16_t addr)
         return VM_ERROR;
     }
     remaining = (uint16_t)((ctx->memory->length - addr) & ~1u);
-    return ztext_decode(ctx->memory->image + addr, remaining, ctx->emit,
-                        ctx->emit_context) == 0 ? VM_OK : VM_ERROR;
+    return ztext_decode(ctx->memory->image + addr, remaining,
+                        vm_emit_wrapper, ctx) == 0 ? VM_OK : VM_ERROR;
 }
 
 static int emit_decimal(struct vm_context *ctx, int16_t value)
@@ -120,7 +147,7 @@ static int emit_decimal(struct vm_context *ctx, int16_t value)
     int i;
 
     if (value < 0) {
-        if (ctx->emit('-', ctx->emit_context) != 0) {
+        if (vm_emit(ctx, '-') != 0) {
             return VM_ERROR;
         }
         magnitude = (uint16_t)(-(int32_t)value);
@@ -128,14 +155,14 @@ static int emit_decimal(struct vm_context *ctx, int16_t value)
         magnitude = (uint16_t)value;
     }
     if (magnitude == 0) {
-        return ctx->emit('0', ctx->emit_context) == 0 ? VM_OK : VM_ERROR;
+        return vm_emit(ctx, '0') == 0 ? VM_OK : VM_ERROR;
     }
     while (magnitude > 0) {
         digits[count++] = (char)('0' + magnitude % 10);
         magnitude = (uint16_t)(magnitude / 10);
     }
     for (i = count - 1; i >= 0; --i) {
-        if (ctx->emit(digits[i], ctx->emit_context) != 0) {
+        if (vm_emit(ctx, digits[i]) != 0) {
             return VM_ERROR;
         }
     }
@@ -425,7 +452,7 @@ static int step_1op(struct vm_context *ctx, const struct instruction *instr,
                 return VM_ERROR;
             }
             return ztext_decode(ctx->memory->image + addr, length,
-                ctx->emit, ctx->emit_context) == 0 ? VM_OK : VM_ERROR;
+                vm_emit_wrapper, ctx) == 0 ? VM_OK : VM_ERROR;
         }
     case 11:                    /* ret */
         return do_return(ctx, operand[0]);
@@ -468,17 +495,64 @@ static int step_0op(struct vm_context *ctx, const struct instruction *instr)
                                  * everything after the opcode byte,
                                  * decode already measured it */
         return ztext_decode(ctx->memory->image + instr->addr + 1,
-            (uint16_t)(instr->length - 1), ctx->emit,
-            ctx->emit_context) == 0 ? VM_OK : VM_ERROR;
+            (uint16_t)(instr->length - 1), vm_emit_wrapper,
+            ctx) == 0 ? VM_OK : VM_ERROR;
     case 3:                     /* print_ret: print, then a newline,
                                  * then return true */
         if (ztext_decode(ctx->memory->image + instr->addr + 1,
-                         (uint16_t)(instr->length - 1), ctx->emit,
-                         ctx->emit_context) != 0 ||
-            ctx->emit('\n', ctx->emit_context) != 0) {
+                         (uint16_t)(instr->length - 1), vm_emit_wrapper,
+                         ctx) != 0 ||
+            vm_emit(ctx, '\n') != 0) {
             return VM_ERROR;
         }
         return do_return(ctx, 1);
+    case 5:                     /* save: on success, branches (per the
+                                 * V1-3 encoding decode already parsed)
+                                 * to capture the resumption point,
+                                 * then hands that state to the save
+                                 * callback; on failure the tentative
+                                 * branch is undone and execution just
+                                 * falls through normally */
+        {
+            uint16_t fallthrough_pc = ctx->state->pc;
+
+            if (ctx->save == 0) {
+                return VM_ERROR;
+            }
+            if (do_branch(ctx, instr, 1) != VM_OK) {
+                return VM_ERROR;
+            }
+            if (ctx->save(ctx->state, ctx->memory->image,
+                          ctx->memory->dynamic_end, ctx->save_context) != 0) {
+                ctx->state->pc = fallthrough_pc;
+            }
+            return VM_OK;
+        }
+    case 6:                     /* restore: per the standard, "the
+                                 * branch is never actually made" --
+                                 * on success the callback overwrites
+                                 * state (including pc) wholesale with
+                                 * the point save captured; on failure
+                                 * (or no restore source configured)
+                                 * this just falls through normally,
+                                 * same as any other failed branch */
+        if (ctx->restore != 0) {
+            ctx->restore(ctx->state, ctx->memory->image,
+                        ctx->memory->dynamic_end, ctx->restore_context);
+        }
+        return VM_OK;
+    case 7:                     /* restart: resets state and dynamic
+                                 * memory to their initial values via a
+                                 * caller-supplied callback -- only the
+                                 * platform knows what "initial" means
+                                 * (a pristine copy of the story kept
+                                 * aside before play began) */
+        if (ctx->restart == 0 ||
+            ctx->restart(ctx->state, ctx->memory->image,
+                        ctx->memory->dynamic_end, ctx->restart_context) != 0) {
+            return VM_ERROR;
+        }
+        return VM_OK;
     case 8:                     /* ret_popped */
         {
             uint16_t value;
@@ -498,7 +572,13 @@ static int step_0op(struct vm_context *ctx, const struct instruction *instr)
         ctx->quit = 1;
         return VM_OK;
     case 11:                    /* new_line */
-        return ctx->emit('\n', ctx->emit_context) == 0 ? VM_OK : VM_ERROR;
+        return vm_emit(ctx, '\n') == 0 ? VM_OK : VM_ERROR;
+    case 12:                    /* show_status: real V3 interpreters
+                                 * redraw a status bar here (location,
+                                 * score, turns) -- a UI concern for
+                                 * the platform terminal layer, not
+                                 * this portable core, so it's a no-op */
+        return VM_OK;
     default:
         return VM_ERROR;
     }
@@ -528,11 +608,57 @@ static int step_var(struct vm_context *ctx, const struct instruction *instr,
     case 3:                     /* put_prop */
         return prop_put(ctx->memory, ctx->object_table, (uint8_t)operand[0],
             (uint8_t)operand[1], operand[2]) == 0 ? VM_OK : VM_ERROR;
+    case 4:                     /* sread: read a line into the text
+                                 * buffer at operand[0] (byte 0 is its
+                                 * max length, characters start at
+                                 * byte 1, V3 has no length byte),
+                                 * lowercase it, then tokenize it into
+                                 * the parse buffer at operand[1]. No
+                                 * store, no branch in V3. */
+        {
+            uint8_t max_length;
+            char buffer[256];
+            int read_length;
+            int i;
+
+            if (ctx->read_line == 0 ||
+                story_mem_read8(ctx->memory, operand[0], &max_length) != 0 ||
+                max_length == 0) {
+                return VM_ERROR;
+            }
+            read_length = ctx->read_line(buffer, max_length,
+                                         ctx->read_line_context);
+            if (read_length < 0 || read_length > max_length) {
+                return VM_ERROR;
+            }
+            for (i = 0; i < read_length; ++i) {
+                char c = buffer[i];
+
+                if (c >= 'A' && c <= 'Z') {
+                    c = (char)(c - 'A' + 'a');
+                }
+                if (story_mem_write8(ctx->memory,
+                                     (uint16_t)(operand[0] + 1 + i),
+                                     (uint8_t)c) != 0) {
+                    return VM_ERROR;
+                }
+            }
+            if (story_mem_write8(ctx->memory,
+                                 (uint16_t)(operand[0] + 1 + read_length),
+                                 0) != 0) {
+                return VM_ERROR;
+            }
+            return parser_tokenize(ctx->memory, ctx->dictionary_table,
+                (uint16_t)(operand[0] + 1), (uint8_t)read_length, 1,
+                operand[1]) == 0 ? VM_OK : VM_ERROR;
+        }
     case 5:                     /* print_char */
-        return ctx->emit((char)operand[0], ctx->emit_context) == 0 ?
-            VM_OK : VM_ERROR;
+        return vm_emit(ctx, (char)operand[0]) == 0 ? VM_OK : VM_ERROR;
     case 6:                     /* print_num */
         return emit_decimal(ctx, (int16_t)operand[0]);
+    case 7:                     /* random */
+        return store_result(ctx, instr->store_variable,
+            vm_random(ctx->state, (int16_t)operand[0]));
     case 8:                     /* push */
         return vm_push(ctx->state, operand[0]) == 0 ? VM_OK : VM_ERROR;
     case 9:                     /* pull: operand[0] is a variable
@@ -546,6 +672,43 @@ static int step_var(struct vm_context *ctx, const struct instruction *instr,
             return vm_write_variable_indirect(ctx->state, ctx->memory,
                 (uint8_t)operand[0], value) == 0 ? VM_OK : VM_ERROR;
         }
+    case 19:                    /* output_stream: only streams 1
+                                 * (screen, via ctx->emit) and 3
+                                 * (memory table, via vm_emit) are
+                                 * modeled -- 2/4 (transcript/the V6
+                                 * command stream) are accepted as
+                                 * no-ops, since this model has no
+                                 * separate transcript sink */
+        {
+            int16_t number = (int16_t)operand[0];
+
+            if (number == 3) {
+                if (ctx->output_table_active ||
+                    instr->operand_count < 2) {
+                    return VM_ERROR;
+                }
+                ctx->output_table = operand[1];
+                ctx->output_table_count = 0;
+                ctx->output_table_active = 1;
+            } else if (number == -3) {
+                if (!ctx->output_table_active) {
+                    return VM_ERROR;
+                }
+                if (story_mem_write8(ctx->memory, ctx->output_table,
+                        (uint8_t)(ctx->output_table_count >> 8)) != 0 ||
+                    story_mem_write8(ctx->memory,
+                        (uint16_t)(ctx->output_table + 1),
+                        (uint8_t)ctx->output_table_count) != 0) {
+                    return VM_ERROR;
+                }
+                ctx->output_table_active = 0;
+            }
+            return VM_OK;
+        }
+    case 20:                    /* input_stream: only one input source
+                                 * exists in this model (ctx->read_line);
+                                 * accepted and ignored */
+        return VM_OK;
     default:
         return VM_ERROR;
     }

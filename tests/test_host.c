@@ -28,6 +28,59 @@ static uint16_t zword(unsigned first, unsigned second, unsigned third,
                       (second << 5) | third);
 }
 
+/* A fixed "sread" input source for tests -- ignores max_length (the
+ * fixed string is always short enough) and returns it verbatim, mixed
+ * case included, so the test can confirm sread lowercases it. */
+static int fixed_read_line(char *buffer, uint8_t max_length, void *context)
+{
+    const char *text = context;
+    size_t length = strlen(text);
+
+    (void)max_length;
+    memcpy(buffer, text, length);
+    return (int)length;
+}
+
+/* A single save slot standing in for whatever the platform layer
+ * would actually do with "save"/"restore"/"restart" -- this reference
+ * model only needs the opcodes' control flow to be correct, not a
+ * real serialization format (see dispatch.h's own comment on
+ * vm_save_fn/vm_restore_fn). The same pair of callbacks serves both
+ * restore (reads a slot a prior save wrote) and restart (reads a slot
+ * pre-populated with the story's pristine state before play began). */
+struct dispatch_save_slot {
+    struct vm_state state;
+    uint8_t dynamic_memory[64];
+    uint16_t dynamic_length;
+    int used;
+};
+
+static int dispatch_do_save(const struct vm_state *state,
+                            const uint8_t *dynamic_memory,
+                            uint16_t dynamic_length, void *context)
+{
+    struct dispatch_save_slot *slot = context;
+
+    slot->state = *state;
+    memcpy(slot->dynamic_memory, dynamic_memory, dynamic_length);
+    slot->dynamic_length = dynamic_length;
+    slot->used = 1;
+    return 0;
+}
+
+static int dispatch_do_restore(struct vm_state *state, uint8_t *dynamic_memory,
+                               uint16_t dynamic_length, void *context)
+{
+    struct dispatch_save_slot *slot = context;
+
+    if (!slot->used) {
+        return -1;
+    }
+    *state = slot->state;
+    memcpy(dynamic_memory, slot->dynamic_memory, dynamic_length);
+    return 0;
+}
+
 int main(void)
 {
     uint8_t image[32] = {0};
@@ -121,6 +174,36 @@ int main(void)
     struct vm_state dispatch_h_state;
     struct vm_context dispatch_h_ctx;
     char dispatch_h_text[8] = "";
+    uint8_t dispatch_i_image[64] = {0};
+    struct story_mem dispatch_i_memory;
+    struct vm_state dispatch_i_state;
+    struct vm_context dispatch_i_ctx;
+    uint16_t dispatch_i_g16, dispatch_i_g17, dispatch_i_g18;
+    uint16_t dispatch_i_g19, dispatch_i_g20;
+    uint8_t dispatch_j_image[128] = {0};
+    struct story_mem dispatch_j_memory;
+    struct vm_state dispatch_j_state;
+    struct vm_context dispatch_j_ctx;
+    uint8_t dispatch_j_byte;
+    uint8_t dispatch_k_image[64] = {0};
+    struct story_mem dispatch_k_memory;
+    struct vm_state dispatch_k_state;
+    struct vm_context dispatch_k_ctx;
+    struct dispatch_save_slot dispatch_k_slot;
+    uint16_t dispatch_k_g16, dispatch_k_g17;
+    uint8_t dispatch_l_image[64] = {0};
+    uint8_t dispatch_l_pristine[64];
+    struct story_mem dispatch_l_memory;
+    struct vm_state dispatch_l_state;
+    struct vm_context dispatch_l_ctx;
+    struct dispatch_save_slot dispatch_l_slot;
+    uint16_t dispatch_l_g16;
+    uint8_t dispatch_m_image[128] = {0};
+    struct story_mem dispatch_m_memory;
+    struct vm_state dispatch_m_state;
+    struct vm_context dispatch_m_ctx;
+    char dispatch_m_text[8] = "";
+    uint16_t dispatch_m_table_len;
 
     header_image[0] = 3;
     header_image[2] = 0;
@@ -1006,6 +1089,301 @@ int main(void)
     assert(vm_step(&dispatch_h_ctx) == 0);
     assert(vm_step(&dispatch_h_ctx) == 0 && dispatch_h_ctx.quit);
     assert(strcmp(dispatch_h_text, "A42hihi") == 0);
+
+    /* Dispatch I: random. A negative range reseeds the PRNG to a
+     * value derived from the range itself, giving a repeatable
+     * sequence -- the exact draws below were captured from this same
+     * vm_random implementation via a scratch harness, not guessed.
+     * random(0) also reseeds (unpredictably, from the wall clock) and
+     * returns 0, which is the one thing about it this test can still
+     * check deterministically. */
+    dispatch_i_image[0x20] = 0xe7;             /* random(-999) -> g16 */
+    dispatch_i_image[0x21] = 0x3f;             /* type: large,omit,omit,omit */
+    dispatch_i_image[0x22] = 0xfc;
+    dispatch_i_image[0x23] = 0x19;
+    dispatch_i_image[0x24] = 0x10;
+    dispatch_i_image[0x25] = 0xe7;             /* random(6) -> g17 */
+    dispatch_i_image[0x26] = 0x7f;
+    dispatch_i_image[0x27] = 6;
+    dispatch_i_image[0x28] = 0x11;
+    dispatch_i_image[0x29] = 0xe7;             /* random(6) -> g18 */
+    dispatch_i_image[0x2a] = 0x7f;
+    dispatch_i_image[0x2b] = 6;
+    dispatch_i_image[0x2c] = 0x12;
+    dispatch_i_image[0x2d] = 0xe7;             /* random(6) -> g19 */
+    dispatch_i_image[0x2e] = 0x7f;
+    dispatch_i_image[0x2f] = 6;
+    dispatch_i_image[0x30] = 0x13;
+    dispatch_i_image[0x31] = 0xe7;             /* random(0) -> g20 */
+    dispatch_i_image[0x32] = 0x7f;
+    dispatch_i_image[0x33] = 0;
+    dispatch_i_image[0x34] = 0x14;
+    dispatch_i_image[0x35] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_i_memory, dispatch_i_image,
+                          sizeof(dispatch_i_image),
+                          sizeof(dispatch_i_image)) == 0);
+    vm_state_init(&dispatch_i_state, 0, 0x20);
+    dispatch_i_ctx.memory = &dispatch_i_memory;
+    dispatch_i_ctx.state = &dispatch_i_state;
+    dispatch_i_ctx.object_table = 0;
+    dispatch_i_ctx.dictionary_table = 0;
+    dispatch_i_ctx.emit = 0;
+    dispatch_i_ctx.emit_context = 0;
+    dispatch_i_ctx.read_line = 0;
+    dispatch_i_ctx.read_line_context = 0;
+    dispatch_i_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_i_ctx) == 0 && dispatch_i_state.pc == 0x25);
+    assert(vm_step(&dispatch_i_ctx) == 0 && dispatch_i_state.pc == 0x29);
+    assert(vm_step(&dispatch_i_ctx) == 0 && dispatch_i_state.pc == 0x2d);
+    assert(vm_step(&dispatch_i_ctx) == 0 && dispatch_i_state.pc == 0x31);
+    assert(vm_step(&dispatch_i_ctx) == 0 && dispatch_i_state.pc == 0x35);
+    assert(vm_step(&dispatch_i_ctx) == 0 && dispatch_i_ctx.quit);
+    assert(story_mem_read16(&dispatch_i_memory, 0, &dispatch_i_g16) == 0 &&
+        dispatch_i_g16 == 0);
+    assert(story_mem_read16(&dispatch_i_memory, 2, &dispatch_i_g17) == 0 &&
+        dispatch_i_g17 == 2);
+    assert(story_mem_read16(&dispatch_i_memory, 4, &dispatch_i_g18) == 0 &&
+        dispatch_i_g18 == 1);
+    assert(story_mem_read16(&dispatch_i_memory, 6, &dispatch_i_g19) == 0 &&
+        dispatch_i_g19 == 3);
+    assert(story_mem_read16(&dispatch_i_memory, 8, &dispatch_i_g20) == 0 &&
+        dispatch_i_g20 == 0);
+
+    /* Dispatch J: sread. Same dictionary layout as the top-of-file
+     * dictionary test (1 separator, 7-byte entries: cat/dog/run).
+     * fixed_read_line hands back "Take cat" -- sread must lowercase
+     * it before tokenizing, and "take" isn't in the dictionary while
+     * "cat" is. */
+    dispatch_j_image[0] = 1;
+    dispatch_j_image[1] = ',';
+    dispatch_j_image[2] = 7;
+    dispatch_j_image[3] = 0x00;
+    dispatch_j_image[4] = 0x03;
+    assert(ztext_encode("cat", 3, &dispatch_j_image[5]) == 0);
+    dispatch_j_image[9] = 0xaa;
+    dispatch_j_image[10] = 0xbb;
+    dispatch_j_image[11] = 0xcc;
+    assert(ztext_encode("dog", 3, &dispatch_j_image[12]) == 0);
+    dispatch_j_image[16] = 0xdd;
+    dispatch_j_image[17] = 0xee;
+    dispatch_j_image[18] = 0xff;
+    assert(ztext_encode("run", 3, &dispatch_j_image[19]) == 0);
+    dispatch_j_image[23] = 0x11;
+    dispatch_j_image[24] = 0x22;
+    dispatch_j_image[25] = 0x33;
+
+    dispatch_j_image[0x50] = 20;               /* text buffer: max length 20 */
+    dispatch_j_image[0x70] = 10;               /* parse buffer: max words 10 */
+
+    dispatch_j_image[0x20] = 0xe4;             /* sread 0x50,0x70 */
+    dispatch_j_image[0x21] = 0x5f;
+    dispatch_j_image[0x22] = 0x50;
+    dispatch_j_image[0x23] = 0x70;
+    dispatch_j_image[0x24] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_j_memory, dispatch_j_image,
+                          sizeof(dispatch_j_image),
+                          sizeof(dispatch_j_image)) == 0);
+    vm_state_init(&dispatch_j_state, 0, 0x20);
+    dispatch_j_ctx.memory = &dispatch_j_memory;
+    dispatch_j_ctx.state = &dispatch_j_state;
+    dispatch_j_ctx.object_table = 0;
+    dispatch_j_ctx.dictionary_table = 0;
+    dispatch_j_ctx.emit = 0;
+    dispatch_j_ctx.emit_context = 0;
+    dispatch_j_ctx.read_line = fixed_read_line;
+    dispatch_j_ctx.read_line_context = (void *)"Take cat";
+    dispatch_j_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_j_ctx) == 0 && dispatch_j_state.pc == 0x24);
+    assert(vm_step(&dispatch_j_ctx) == 0 && dispatch_j_ctx.quit);
+
+    assert(memcmp(&dispatch_j_image[0x51], "take cat", 8) == 0);
+    assert(dispatch_j_image[0x59] == 0);       /* zero terminator */
+    assert(dispatch_j_image[0x71] == 2);       /* word count */
+    /* word 0: "take" -- not in the dictionary */
+    assert(story_mem_read16(&dispatch_j_memory, 0x72, &word) == 0 &&
+        word == 0);
+    assert(story_mem_read8(&dispatch_j_memory, 0x74, &dispatch_j_byte) == 0 &&
+        dispatch_j_byte == 4);
+    assert(story_mem_read8(&dispatch_j_memory, 0x75, &dispatch_j_byte) == 0 &&
+        dispatch_j_byte == 1);
+    /* word 1: "cat" -- found at dictionary offset 5 */
+    assert(story_mem_read16(&dispatch_j_memory, 0x76, &word) == 0 &&
+        word == 5);
+    assert(story_mem_read8(&dispatch_j_memory, 0x78, &dispatch_j_byte) == 0 &&
+        dispatch_j_byte == 3);
+    assert(story_mem_read8(&dispatch_j_memory, 0x79, &dispatch_j_byte) == 0 &&
+        dispatch_j_byte == 6);
+
+    /* Dispatch K: save/restore round trip. save's branch (taken on
+     * success, per the V1-3 encoding) skips a "store g16,99" and
+     * lands on "store g17,1" -- that landing point is "the point
+     * where it was saved". A later "store g16,2" then mutates memory;
+     * restore hands back the saved snapshot, which un-mutates g16 and
+     * re-enters execution at the landing point (running "store
+     * g17,1" a second time), never taking its own branch, per "the
+     * branch is never actually made". */
+    dispatch_k_image[0x20] = 0xcd;             /* store g16,1 */
+    dispatch_k_image[0x21] = 0x5f;
+    dispatch_k_image[0x22] = 0x10;
+    dispatch_k_image[0x23] = 1;
+    dispatch_k_image[0x24] = 0xb5;             /* save ?+6 */
+    dispatch_k_image[0x25] = 0xc6;
+    dispatch_k_image[0x26] = 0xcd;             /* store g16,99 -- skipped */
+    dispatch_k_image[0x27] = 0x5f;
+    dispatch_k_image[0x28] = 0x10;
+    dispatch_k_image[0x29] = 99;
+    dispatch_k_image[0x2a] = 0xcd;             /* store g17,1 -- save's
+                                                * resumption point */
+    dispatch_k_image[0x2b] = 0x5f;
+    dispatch_k_image[0x2c] = 0x11;
+    dispatch_k_image[0x2d] = 1;
+    dispatch_k_image[0x2e] = 0xcd;             /* store g16,2 -- mutate
+                                                * after save */
+    dispatch_k_image[0x2f] = 0x5f;
+    dispatch_k_image[0x30] = 0x10;
+    dispatch_k_image[0x31] = 2;
+    dispatch_k_image[0x32] = 0xb6;             /* restore */
+    dispatch_k_image[0x33] = 0xba;             /* quit -- only reached
+                                                * if restore fails */
+
+    assert(story_mem_init(&dispatch_k_memory, dispatch_k_image,
+                          sizeof(dispatch_k_image),
+                          sizeof(dispatch_k_image)) == 0);
+    vm_state_init(&dispatch_k_state, 0, 0x20);
+    dispatch_k_ctx.memory = &dispatch_k_memory;
+    dispatch_k_ctx.state = &dispatch_k_state;
+    dispatch_k_ctx.object_table = 0;
+    dispatch_k_ctx.dictionary_table = 0;
+    dispatch_k_ctx.emit = 0;
+    dispatch_k_ctx.emit_context = 0;
+    dispatch_k_ctx.output_table_active = 0;
+    dispatch_k_ctx.read_line = 0;
+    dispatch_k_ctx.read_line_context = 0;
+    dispatch_k_slot.used = 0;
+    dispatch_k_ctx.save = dispatch_do_save;
+    dispatch_k_ctx.save_context = &dispatch_k_slot;
+    dispatch_k_ctx.restore = dispatch_do_restore;
+    dispatch_k_ctx.restore_context = &dispatch_k_slot;
+    dispatch_k_ctx.restart = 0;
+    dispatch_k_ctx.restart_context = 0;
+    dispatch_k_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_k_ctx) == 0 && dispatch_k_state.pc == 0x24);
+    assert(vm_step(&dispatch_k_ctx) == 0 && dispatch_k_state.pc == 0x2a);
+    assert(vm_step(&dispatch_k_ctx) == 0 && dispatch_k_state.pc == 0x2e);
+    assert(vm_step(&dispatch_k_ctx) == 0 && dispatch_k_state.pc == 0x32);
+    assert(vm_step(&dispatch_k_ctx) == 0 && dispatch_k_state.pc == 0x2a);
+    assert(vm_step(&dispatch_k_ctx) == 0 && dispatch_k_state.pc == 0x2e);
+    assert(!dispatch_k_ctx.quit);
+    assert(story_mem_read16(&dispatch_k_memory, 0, &dispatch_k_g16) == 0 &&
+        dispatch_k_g16 == 1);              /* the mutation to 2 was undone */
+    assert(story_mem_read16(&dispatch_k_memory, 2, &dispatch_k_g17) == 0 &&
+        dispatch_k_g17 == 1);
+
+    /* Dispatch L: restart resets both dynamic memory and pc to their
+     * initial values. */
+    dispatch_l_image[0x20] = 0xcd;             /* store g16,42 */
+    dispatch_l_image[0x21] = 0x5f;
+    dispatch_l_image[0x22] = 0x10;
+    dispatch_l_image[0x23] = 42;
+    dispatch_l_image[0x24] = 0xb7;             /* restart */
+
+    memcpy(dispatch_l_pristine, dispatch_l_image, sizeof(dispatch_l_image));
+    assert(story_mem_init(&dispatch_l_memory, dispatch_l_image,
+                          sizeof(dispatch_l_image),
+                          sizeof(dispatch_l_image)) == 0);
+    vm_state_init(&dispatch_l_state, 0, 0x20);
+    dispatch_l_ctx.memory = &dispatch_l_memory;
+    dispatch_l_ctx.state = &dispatch_l_state;
+    dispatch_l_ctx.object_table = 0;
+    dispatch_l_ctx.dictionary_table = 0;
+    dispatch_l_ctx.emit = 0;
+    dispatch_l_ctx.emit_context = 0;
+    dispatch_l_ctx.output_table_active = 0;
+    dispatch_l_ctx.read_line = 0;
+    dispatch_l_ctx.read_line_context = 0;
+    dispatch_l_ctx.save = 0;
+    dispatch_l_ctx.save_context = 0;
+    dispatch_l_ctx.restore = 0;
+    dispatch_l_ctx.restore_context = 0;
+    dispatch_l_slot.used = 1;
+    vm_state_init(&dispatch_l_slot.state, 0, 0x20);
+    memcpy(dispatch_l_slot.dynamic_memory, dispatch_l_pristine,
+          sizeof(dispatch_l_pristine));
+    dispatch_l_slot.dynamic_length = sizeof(dispatch_l_pristine);
+    dispatch_l_ctx.restart = dispatch_do_restore;
+    dispatch_l_ctx.restart_context = &dispatch_l_slot;
+    dispatch_l_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_l_ctx) == 0 && dispatch_l_state.pc == 0x24);
+    assert(story_mem_read16(&dispatch_l_memory, 0, &dispatch_l_g16) == 0 &&
+        dispatch_l_g16 == 42);
+    assert(vm_step(&dispatch_l_ctx) == 0 && dispatch_l_state.pc == 0x20);
+    assert(story_mem_read16(&dispatch_l_memory, 0, &dispatch_l_g16) == 0 &&
+        dispatch_l_g16 == 0);              /* dynamic memory reset too */
+
+    /* Dispatch M: output_stream redirects print output into a memory
+     * table (stream 3) and back to the screen (stream -3); show_status
+     * is a no-op in this portable core. The table lives at 0x50, well
+     * clear of the program bytes below. */
+    dispatch_m_image[0x20] = 0xf3;             /* output_stream 3,0x50 */
+    dispatch_m_image[0x21] = 0x5f;
+    dispatch_m_image[0x22] = 3;
+    dispatch_m_image[0x23] = 0x50;
+    dispatch_m_image[0x24] = 0xe5;             /* print_char 'h' */
+    dispatch_m_image[0x25] = 0x7f;
+    dispatch_m_image[0x26] = 'h';
+    dispatch_m_image[0x27] = 0xe5;             /* print_char 'i' */
+    dispatch_m_image[0x28] = 0x7f;
+    dispatch_m_image[0x29] = 'i';
+    dispatch_m_image[0x2a] = 0xf3;             /* output_stream -3 */
+    dispatch_m_image[0x2b] = 0x3f;
+    dispatch_m_image[0x2c] = 0xff;
+    dispatch_m_image[0x2d] = 0xfd;
+    dispatch_m_image[0x2e] = 0xe5;             /* print_char 'X' */
+    dispatch_m_image[0x2f] = 0x7f;
+    dispatch_m_image[0x30] = 'X';
+    dispatch_m_image[0x31] = 0xbc;             /* show_status */
+    dispatch_m_image[0x32] = 0xba;             /* quit */
+
+    assert(story_mem_init(&dispatch_m_memory, dispatch_m_image,
+                          sizeof(dispatch_m_image),
+                          sizeof(dispatch_m_image)) == 0);
+    vm_state_init(&dispatch_m_state, 0, 0x20);
+    dispatch_m_ctx.memory = &dispatch_m_memory;
+    dispatch_m_ctx.state = &dispatch_m_state;
+    dispatch_m_ctx.object_table = 0;
+    dispatch_m_ctx.dictionary_table = 0;
+    dispatch_m_ctx.emit = append_char;
+    dispatch_m_ctx.emit_context = dispatch_m_text;
+    dispatch_m_ctx.output_table_active = 0;
+    dispatch_m_ctx.read_line = 0;
+    dispatch_m_ctx.read_line_context = 0;
+    dispatch_m_ctx.save = 0;
+    dispatch_m_ctx.save_context = 0;
+    dispatch_m_ctx.restore = 0;
+    dispatch_m_ctx.restore_context = 0;
+    dispatch_m_ctx.restart = 0;
+    dispatch_m_ctx.restart_context = 0;
+    dispatch_m_ctx.quit = 0;
+
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_state.pc == 0x24);
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_state.pc == 0x27);
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_state.pc == 0x2a);
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_state.pc == 0x2e);
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_state.pc == 0x31);
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_state.pc == 0x32);
+    assert(vm_step(&dispatch_m_ctx) == 0 && dispatch_m_ctx.quit);
+    assert(strcmp(dispatch_m_text, "X") == 0);     /* only the un-redirected
+                                                    * print_char reached
+                                                    * the screen */
+    assert(story_mem_read16(&dispatch_m_memory, 0x50, &dispatch_m_table_len) == 0 &&
+        dispatch_m_table_len == 2);
+    assert(memcmp(&dispatch_m_image[0x52], "hi", 2) == 0);
 
     return 0;
 }

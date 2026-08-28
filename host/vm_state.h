@@ -29,6 +29,10 @@ struct vm_state {
     uint16_t eval_depth;
     struct vm_frame frames[VM_FRAMES_MAX];
     uint16_t frame_depth;
+    uint32_t random_state;      /* xorshift32 PRNG state for vm_random;
+                                 * seeded to a fixed nonzero default by
+                                 * vm_state_init so range>0 draws work
+                                 * before the game ever reseeds */
 };
 
 void vm_state_init(struct vm_state *state, uint16_t globals_base,
@@ -63,5 +67,12 @@ int vm_read_variable_indirect(struct vm_state *state,
 int vm_write_variable_indirect(struct vm_state *state,
                                struct story_mem *memory,
                                uint8_t variable, uint16_t value);
+
+/* Implements the "random" opcode's exact semantics: range > 0 returns
+ * a uniform draw in [1, range]; range == 0 reseeds unpredictably (from
+ * the wall clock) and returns 0; range < 0 reseeds to a value derived
+ * from range itself, for a repeatable sequence useful in testing, and
+ * also returns 0. */
+uint16_t vm_random(struct vm_state *state, int16_t range);
 
 #endif
