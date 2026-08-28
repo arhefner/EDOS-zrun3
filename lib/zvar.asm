@@ -125,12 +125,24 @@ FRAME_SIZE:              equ     36
             ldn     rb
             plo     ra                  ; ra = frame_top
 
-            mov     rb, r8
-            sub16   rb, ra              ; rb = candidate - frame_top;
+            mov     rb, ra
+            sub16   rb, r8              ; rb = frame_top - candidate;
                                         ; DF=1 (no borrow) means
-                                        ; candidate >= frame_top, i.e.
-                                        ; out of range
-            lbdf    zvfp_fail
+                                        ; frame_top >= candidate, i.e.
+                                        ; still in range (an exact fit,
+                                        ; candidate == frame_top, is
+                                        ; valid -- the pushed frame
+                                        ; occupies up to but not
+                                        ; including frame_top, matching
+                                        ; frame_top's own documented
+                                        ; "exclusive end" meaning, and
+                                        ; matching zstack_push's own
+                                        ; identical convention, computed
+                                        ; the same way round for the
+                                        ; same reason). DF=0 (borrow)
+                                        ; means frame_top < candidate --
+                                        ; genuinely out of range
+            lbnf    zvfp_fail
 
             mov     rb, zv_frame_ptr    ; commit: nothing below can
             ghi     r8                  ; fail, so advance frame_ptr

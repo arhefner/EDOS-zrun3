@@ -12,7 +12,8 @@ HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/parser.c host/decode.c host/dispatch.c tests/test_host.c
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
 	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg lib/zdec.prg \
-        lib/zinputl.prg lib/zdecode.prg lib/zvar.prg lib/zdispatch.prg
+        lib/zinputl.prg lib/zdecode.prg lib/zvar.prg lib/zdispatch.prg \
+	lib/zdispemit.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
 	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
 	diag/zdictdiag.prg diag/zdictdiag_main.prg diag/zparsediag.prg \
@@ -41,6 +42,7 @@ asm: $(ASM_MODULES)
 	@test -f lib/zdecode.prg
 	@test -f lib/zvar.prg
 	@test -f lib/zdispatch.prg
+	@test -f lib/zdispemit.prg
 
 # diag/zdiag_main, diag/zobjdiag_main, diag/zpropdiag_main,
 # diag/zdictdiag_main, diag/zparsediag_main, diag/zdecdiag_main,
@@ -75,7 +77,13 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/zdecodediag.lkb
 	$(LINK) $(LFLAGS) -o diag/zvardiag diag/zvardiag_main.prg diag/zvardiag.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg
 	rm -f diag/zvardiag.lkb
-	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg
+	# diag/zdispatchdiag.prg supplies its own zdisp_emit_string (a
+	# capture-buffer test double, so print/new_line stay bare-metal
+	# testable and assertable) -- lib/zdispemit.prg's real, K_MSG-
+	# backed implementation of the same name is deliberately left out
+	# of this link; an eventual ELF-DOS interpreter program links that
+	# one in instead, never both together (duplicate symbol).
+	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg
 	rm -f diag/zdispatchdiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def

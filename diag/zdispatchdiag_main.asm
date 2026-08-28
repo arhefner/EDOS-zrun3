@@ -56,12 +56,17 @@ zd_store_flag:
             mov     rb, zdd_results+2
             call    zd_report
 
+            call    K_INMSG
+            db      "check 3 (print, new_line, call+print_ret): ",0
+            mov     rb, zdd_results+3
+            call    zd_report
+
             mov     rf, zd_had_failure
             ldn     rf
             lbnz    zd_some_failed
 
             call    K_INMSG
-            db      "All 3 checks passed.",13,10,0
+            db      "All 4 checks passed.",13,10,0
             ldi     0
             lbr     zd_exit
 

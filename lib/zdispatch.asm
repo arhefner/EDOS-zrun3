@@ -2,14 +2,32 @@
 ; zdispatch.asm - V3 opcode execution engine (proof-of-concept slice)
 ;
 ; Mirrors host/dispatch.c's own first proof-of-concept milestone: 2OP
-; je/store/add/sub, 1OP jz/ret/jump, 0OP rtrue/rfalse/quit, and VAR
-; call. Deliberately does not yet cover print/new_line (text output
-; needs its own design pass -- how a "print"-family opcode reaches an
-; actual screen depends on the platform layer, e.g. K_TYPE under
-; ELF-DOS vs. a bare-metal diag's own capture buffer, and host's own
-; ctx->emit callback has no direct 1802 equivalent yet) or any other
-; opcode; unrecognized opcodes fail with DF=1, exactly like
-; zdecode_instruction does for an unrecognized instruction.
+; je/store/add/sub, 1OP jz/ret/jump, 0OP rtrue/rfalse/print/print_ret/
+; quit/new_line, and VAR call. Any other opcode fails with DF=1,
+; exactly like zdecode_instruction does for an unrecognized
+; instruction.
+;
+; print-family output goes through zdisp_emit_string (RF = a NUL-
+; terminated buffer, set immediately before the call) -- one narrow
+; platform hook, per docs/ARCHITECTURE.md's "core never calls an
+; ELF-DOS entry point directly" rule, with its actual implementation
+; chosen at LINK time, not runtime: lib/zdispemit.asm's real one is a
+; thin passthrough to K_MSG for an eventual ELF-DOS interpreter build;
+; diag/zdispatchdiag.asm links in a capture-buffer version instead, so
+; print/new_line stay bare-metal testable without the ELF-DOS kernel
+; (which K_MSG itself requires) and so a check can assert on the exact
+; captured bytes rather than only "did it crash". This shape doesn't
+; match host's own ctx->emit -- a per-character callback ztext_decode
+; drives directly -- because zdec_decode (the 1802 Z-text decoder)
+; fills a caller-supplied buffer rather than calling back per
+; character; since zdec_decode's own output is already NUL-terminated,
+; the whole decoded string goes to zdisp_emit_string in one call
+; (zdisp_print_inline), never walked a character at a time. icall.asm
+; (this project's actual indirect-call mechanism) is deliberately not
+; used here -- it exists for genuinely runtime-dynamic module loading,
+; which this isn't; both zdisp_emit_string implementations are known
+; at link time, matching lib/lineedit.asm's own precedent for
+; preferring a plain call over icall when nothing is truly dynamic.
 ;
 ; zdisp_step (no arguments -- uses zdisp_pc) decodes and executes
 ; exactly one instruction, advancing zdisp_pc (or branching/calling/
@@ -62,16 +80,20 @@
 
             extrn   zmread
             extrn   zmread16
+            extrn   zmbase
             extrn   zdecode_instruction
+            extrn   zdec_decode
             extrn   zvar_read
             extrn   zvar_write
             extrn   zvar_write_indirect
             extrn   zvar_frame_push
             extrn   zvar_frame_pop
+            extrn   zdisp_emit_string
 
             extrn   zdisp_branch
             extrn   zdisp_return
             extrn   zdisp_do_call
+            extrn   zdisp_print_inline
 
             extrn   zdisp_pc
             extrn   zdisp_quit
@@ -83,6 +105,8 @@
             extrn   zdisp_instr
             extrn   zdisp_operand
             extrn   zdisp_locals
+            extrn   zdisp_text_buf
+            extrn   zdisp_newline_buf
 
 ; zdisp_step: no arguments (uses zdisp_pc). Returns DF=1 for a decode
 ; error or an opcode this slice doesn't recognize yet.
@@ -283,8 +307,20 @@ zds_0op:
             lbz     zds_rfalse
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     2
+            lbz     zds_print
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     3
+            lbz     zds_print_ret
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     10
             lbz     zds_quit
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     11
+            lbz     zds_new_line
             stc
             rtn
 
@@ -512,6 +548,28 @@ zds_quit:
 ; ---- call ----
 zds_call:
             call    zdisp_do_call
+            rtn
+
+; ---- print: decode and emit this instruction's own inline text ----
+zds_print:
+            call    zdisp_print_inline
+            rtn
+
+; ---- print_ret: print, then a newline, then return true ----
+zds_print_ret:
+            call    zdisp_print_inline
+            lbdf    zds_error
+            mov     rf, zdisp_newline_buf
+            call    zdisp_emit_string
+            mov     rf, 1
+            call    zdisp_return
+            rtn
+
+; ---- new_line ----
+zds_new_line:
+            mov     rf, zdisp_newline_buf
+            call    zdisp_emit_string
+            clc
             rtn
 
 zds_error:
@@ -843,6 +901,75 @@ zdc_fail:
             rtn
             endp
 
+; zdisp_print_inline (internal): decodes and emits the CURRENT
+; instruction's own inline packed z-text (immediately following its
+; 1-byte opcode, spanning the rest of instr.length -- decode already
+; measured this exactly for a has_text opcode, the same way it does
+; for instr.length itself). zdec_decode's own output is already NUL-
+; terminated, so the whole string goes to zdisp_emit_string in one
+; call -- no need to walk it a character at a time the way host's own
+; per-character emit callback does; that shape doesn't exist on this
+; side, and doesn't need to. DF=1 on a z-text decode failure (an
+; unsupported abbreviation z-char, matching zdec_decode's own).
+            proc    zdisp_print_inline
+            mov     r8, zdisp_instr+ZDI_ADDR
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = addr
+            add16   r9, 1               ; r9 = addr+1 (skip the
+                                        ; opcode byte) -- still a GUEST
+                                        ; address at this point
+
+            mov     r8, zmbase
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = zmbase (the real host
+                                        ; address the guest's own
+                                        ; address 0 maps to)
+            add16   r9, ra              ; r9 = the real host address of
+                                        ; the packed text -- zdec_decode
+                                        ; (unlike zmread/zde_read_byte)
+                                        ; reads real memory directly,
+                                        ; with no guest-address concept
+                                        ; of its own, so this
+                                        ; translation is this call
+                                        ; site's own job. Safe to do
+                                        ; without zmread's own bounds
+                                        ; check: decode_instruction's
+                                        ; has_text scan already walked
+                                        ; every one of these bytes
+                                        ; through zmread to measure
+                                        ; instr.length in the first
+                                        ; place, so they're already
+                                        ; known resident
+            mov     rd, r9              ; rd = packed text address
+
+            mov     r8, zdisp_instr+ZDI_LENGTH
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = length
+            sub16   ra, 1               ; ra = length-1 (packed byte
+                                        ; count)
+            mov     rc, ra
+
+            mov     rf, zdisp_text_buf
+            call    zdec_decode         ; decodes into zdisp_text_buf,
+                                        ; NUL-terminated
+            lbdf    zdpi_fail
+
+            mov     rf, zdisp_text_buf
+            call    zdisp_emit_string
+            clc
+            rtn
+
+zdpi_fail:
+            stc
+            rtn
+            endp
+
             proc    _zdispatch_data
 zdisp_pc:            dw      0
 zdisp_quit:           db      0
@@ -854,6 +981,19 @@ zdisp_local_count:        db      0
 zdisp_instr:               ds      ZDI_SIZE
 zdisp_operand:              ds      8       ; 4 resolved operand words
 zdisp_locals:                ds      30      ; up to 15 locals
+zdisp_text_buf:               ds      512     ; decoded print-family
+                                              ; text -- generous for
+                                              ; any V3 game string,
+                                              ; not defensively bounds-
+                                              ; checked against zdec_
+                                              ; decode's own output
+                                              ; (matches this project's
+                                              ; established "trust the
+                                              ; input" boundary)
+zdisp_newline_buf:             db      10, 0   ; a constant 2-byte
+                                              ; NUL-terminated "\n",
+                                              ; reused by both
+                                              ; print_ret and new_line
                 public  zdisp_pc
                 public  zdisp_quit
                 public  zdisp_i
@@ -864,4 +1004,6 @@ zdisp_locals:                ds      30      ; up to 15 locals
                 public  zdisp_instr
                 public  zdisp_operand
                 public  zdisp_locals
+                public  zdisp_text_buf
+                public  zdisp_newline_buf
             endp
