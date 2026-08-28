@@ -508,13 +508,19 @@ zdi_finalize:
             ldn     r8
             plo     r9                  ; r9 = the original addr
 
+            mov     r7, r9              ; r7 = addr, stashed -- zde_put16
+                                        ; (via zde_fieldptr) clobbers
+                                        ; r8/r9/rf, so r9 itself does
+                                        ; NOT survive the call below;
+                                        ; r7 does
+
             mov     r8, rd
             sub16   r8, r9              ; r8 = cursor - addr = length
             mov     rc, r8
             ldi     ZDI_LENGTH
             call    zde_put16
 
-            mov     rc, r9
+            mov     rc, r7
             ldi     ZDI_ADDR
             call    zde_put16
 

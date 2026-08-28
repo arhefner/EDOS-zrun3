@@ -9,8 +9,14 @@
 ; short-form 1OP with a single-byte branch, variable-form VAR with
 ; omitted trailing operands, short-form 0OP with inline text, long-
 ; form 2OP with a two-byte negative branch offset (the sign-extension
-; path), and a truncated-instruction failure case. Touches no ELF-DOS
-; kernel or BIOS entry points.
+; path), and a truncated-instruction failure case. Checks 0-4 also
+; verify instr.addr itself (== 0, since every one of them decodes at
+; guest address 0) -- added after a real bug (zdi_finalize wrote a
+; leftover zde_fieldptr offset instead of the real address, because
+; the call to zde_put16 for instr.length clobbers r9 after it, not
+; before) went undetected here for a full round of hardware testing;
+; nothing in this file had ever asserted on addr before. Touches no
+; ELF-DOS kernel or BIOS entry points.
 ;
 
 #include    include/opcodes.def
@@ -69,6 +75,12 @@ ZDDIAG_COUNT:   equ     6
             call    zdecode_instruction
             lbdf    zdd_fail0
 
+            ldi     ZDI_ADDR
+            call    zdd_field
+            lbnz    zdd_fail0
+            ldi     ZDI_ADDR+1
+            call    zdd_field
+            lbnz    zdd_fail0
             ldi     ZDI_FORM
             call    zdd_field
             xri     ZDI_FORM_LONG
@@ -148,6 +160,12 @@ zdd_store0: str     rb
             call    zdecode_instruction
             lbdf    zdd_fail1
 
+            ldi     ZDI_ADDR
+            call    zdd_field
+            lbnz    zdd_fail1
+            ldi     ZDI_ADDR+1
+            call    zdd_field
+            lbnz    zdd_fail1
             ldi     ZDI_FORM
             call    zdd_field
             xri     ZDI_FORM_SHORT
@@ -226,6 +244,12 @@ zdd_store1: str     rb
             call    zdecode_instruction
             lbdf    zdd_fail2
 
+            ldi     ZDI_ADDR
+            call    zdd_field
+            lbnz    zdd_fail2
+            ldi     ZDI_ADDR+1
+            call    zdd_field
+            lbnz    zdd_fail2
             ldi     ZDI_FORM
             call    zdd_field
             xri     ZDI_FORM_VARIABLE
@@ -302,6 +326,12 @@ zdd_store2: str     rb
             call    zdecode_instruction
             lbdf    zdd_fail3
 
+            ldi     ZDI_ADDR
+            call    zdd_field
+            lbnz    zdd_fail3
+            ldi     ZDI_ADDR+1
+            call    zdd_field
+            lbnz    zdd_fail3
             ldi     ZDI_FORM
             call    zdd_field
             xri     ZDI_FORM_SHORT
@@ -365,6 +395,12 @@ zdd_store3: str     rb
             call    zdecode_instruction
             lbdf    zdd_fail4
 
+            ldi     ZDI_ADDR
+            call    zdd_field
+            lbnz    zdd_fail4
+            ldi     ZDI_ADDR+1
+            call    zdd_field
+            lbnz    zdd_fail4
             ldi     ZDI_FORM
             call    zdd_field
             xri     ZDI_FORM_LONG
