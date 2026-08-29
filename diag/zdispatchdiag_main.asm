@@ -76,12 +76,17 @@ zd_store_flag:
             mov     rb, zdd_results+6
             call    zd_report
 
+            call    K_INMSG
+            db      "check 7 (memory access, put_prop): ",0
+            mov     rb, zdd_results+7
+            call    zd_report
+
             mov     rf, zd_had_failure
             ldn     rf
             lbnz    zd_some_failed
 
             call    K_INMSG
-            db      "All 7 checks passed.",13,10,0
+            db      "All 8 checks passed.",13,10,0
             ldi     0
             lbr     zd_exit
 

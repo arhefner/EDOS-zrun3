@@ -76,11 +76,14 @@
             extrn   zdd_mem6
             extrn   zdd_stack6
             extrn   zdd_frames6
+            extrn   zdd_mem7
+            extrn   zdd_stack7
+            extrn   zdd_frames7
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     7
+ZDDIAG_COUNT:   equ     8
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -2169,6 +2172,477 @@ zc6_zero_loop:
 zv_fail6:   mov     rb, zdd_results+6
             ldi     1
 zv_store6:  str     rb
+
+; ---- check 7: memory access and put_prop (storew, storeb, loadw,
+; loadb, put_prop) -- exercises zmwrite16/zmwrite's guest-address
+; array arithmetic and the new zprop_put primitive (single-byte write
+; for a length-1 property, big-endian word write for length-2, DF=1
+; for a property the object doesn't have). Reuses a minimal 1-object
+; table (object1, proptable @ guest $60: prop5 len1, prop3 len2). ----
+; ---- check 7: setup ----
+            mov     rd, zdd_mem7
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack7
+            mov     rf, zdd_stack7+16
+            call    zstack_init
+            mov     rd, $00e0
+            mov     rf, zdd_frames7
+            mov     rc, zdd_frames7+36
+            call    zvar_init
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9
+            mov     rd, r9
+            call    zobj_init
+
+            mov     rf, zdd_mem7
+            mov     r8, 256
+zc7_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            sub16   r8, 1
+            glo     r8
+            lbnz    zc7_zero_loop
+            ghi     r8
+            lbnz    zc7_zero_loop
+
+; ---- check 7: object table (object1 has prop5 len1=0x11, prop3 len2=0x2233, proptable @ guest $60) ----
+            mov     r9, zdd_mem7
+            add16   r9, $60         ; r9 = real addr of obj1's proptable
+            mov     rf, zdd_mem7
+            add16   rf, $44         ; obj1 entry offset68: child=0(unused), proptable (real) at +1,+2
+            ldi     $00
+            str     rf
+            inc     rf
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem7
+            add16   rf, $60         ; obj1 proptable: no name, prop5(len1)=0x11, prop3(len2)=0x2233, end
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $23
+            str     rf
+            inc     rf
+            ldi     $22
+            str     rf
+            inc     rf
+            ldi     $33
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+; ---- check 7: program bytes ----
+            mov     rf, zdd_mem7
+            add16   rf, $80
+            ldi     $e1
+            str     rf
+            inc     rf
+            ldi     $53
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $34
+            str     rf
+            inc     rf
+            ldi     $e1
+            str     rf
+            inc     rf
+            ldi     $53
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $56
+            str     rf
+            inc     rf
+            ldi     $78
+            str     rf
+            inc     rf
+            ldi     $0f
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $0f
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $e2
+            str     rf
+            inc     rf
+            ldi     $57
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $04
+            str     rf
+            inc     rf
+            ldi     $99
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $04
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $e2
+            str     rf
+            inc     rf
+            ldi     $57
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $ab
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $e3
+            str     rf
+            inc     rf
+            ldi     $57
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $77
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $14
+            str     rf
+            inc     rf
+            ldi     $e3
+            str     rf
+            inc     rf
+            ldi     $53
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $34
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $15
+            str     rf
+            inc     rf
+            ldi     $e3
+            str     rf
+            inc     rf
+            ldi     $57
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $09
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $0080
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+
+; ---- check 7: steps ----
+            call    zdisp_step              ; storew($10,0,0x1234) -> pc=$86
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $86
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; storew($10,1,0x5678) -> pc=$8c
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $8c
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; loadw($10,0)->g16[1234] -> pc=$90
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $90
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; loadw($10,1)->g17[5678] -> pc=$94
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $94
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; storeb($10,4,0x99) -> pc=$99
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $99
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; loadb($10,4)->g18[0099] -> pc=$9d
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $9d
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; storeb($10,5,0xAB) -> pc=$a2
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $a2
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; loadb($10,5)->g19[00AB] -> pc=$a6
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $a6
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; put_prop(1,5,0x77) -> pc=$ab
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $ab
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; get_prop(1,5)->g20[0077] -> pc=$af
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $af
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; put_prop(1,3,0x1234) -> pc=$b5
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $b5
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; get_prop(1,3)->g21[1234] -> pc=$b9
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $b9
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; put_prop(1,9,99)[expect DF=1]
+            lbnf    zv_fail7                ; expect DF=1
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $be
+            lbnz    zv_fail7
+
+            call    zdisp_step              ; quit -> pc=$bf
+            lbdf    zv_fail7
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail7
+            ldn     rf
+            xri     $bf
+            lbnz    zv_fail7
+
+; ---- check 7: globals ----
+            ; global16 addr=$00e0 (loadw index0)
+            mov     rf, zdd_mem7
+            add16   rf, $00e0
+            ldn     rf
+            xri     $12
+            lbnz    zv_fail7
+            inc     rf
+            ldn     rf
+            xri     $34
+            lbnz    zv_fail7
+
+            ; global17 addr=$00e2 (loadw index1)
+            mov     rf, zdd_mem7
+            add16   rf, $00e2
+            ldn     rf
+            xri     $56
+            lbnz    zv_fail7
+            inc     rf
+            ldn     rf
+            xri     $78
+            lbnz    zv_fail7
+
+            ; global18 addr=$00e4 (loadb index4)
+            mov     rf, zdd_mem7
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail7
+            inc     rf
+            ldn     rf
+            xri     $99
+            lbnz    zv_fail7
+
+            ; global19 addr=$00e6 (loadb index5)
+            mov     rf, zdd_mem7
+            add16   rf, $00e6
+            ldn     rf
+            lbnz    zv_fail7
+            inc     rf
+            ldn     rf
+            xri     $ab
+            lbnz    zv_fail7
+
+            ; global20 addr=$00e8 (get_prop after put_prop len1)
+            mov     rf, zdd_mem7
+            add16   rf, $00e8
+            ldn     rf
+            lbnz    zv_fail7
+            inc     rf
+            ldn     rf
+            xri     $77
+            lbnz    zv_fail7
+
+            ; global21 addr=$00ea (get_prop after put_prop len2)
+            mov     rf, zdd_mem7
+            add16   rf, $00ea
+            ldn     rf
+            xri     $12
+            lbnz    zv_fail7
+            inc     rf
+            ldn     rf
+            xri     $34
+            lbnz    zv_fail7
+            mov     rb, zdd_results+7
+            ldi     0
+            lbr     zv_store7
+zv_fail7:   mov     rb, zdd_results+7
+            ldi     1
+zv_store7:  str     rb
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -2253,6 +2727,9 @@ zdd_frames5:    ds      36                  ; 1 frame * 36 bytes
 zdd_mem6:       ds      256
 zdd_stack6:     ds      16
 zdd_frames6:    ds      36                  ; 1 frame * 36 bytes
+zdd_mem7:       ds      256
+zdd_stack7:     ds      16
+zdd_frames7:    ds      36                  ; 1 frame * 36 bytes
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
 zdd_results:    ds      ZDDIAG_COUNT
@@ -2277,6 +2754,9 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem6
                 public  zdd_stack6
                 public  zdd_frames6
+                public  zdd_mem7
+                public  zdd_stack7
+                public  zdd_frames7
                 public  zdd_captured_text
                 public  zdd_capture_cursor
                 public  zdd_results

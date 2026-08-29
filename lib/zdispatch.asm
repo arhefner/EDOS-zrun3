@@ -80,6 +80,8 @@
 
             extrn   zmread
             extrn   zmread16
+            extrn   zmwrite
+            extrn   zmwrite16
             extrn   zmbase
             extrn   zdecode_instruction
             extrn   zdec_decode
@@ -103,6 +105,7 @@
             extrn   zprop_get_len
             extrn   zprop_get
             extrn   zprop_get_next
+            extrn   zprop_put
 
             extrn   zdisp_branch
             extrn   zdisp_return
@@ -338,6 +341,14 @@ zds_2op:
             lbz     zds_insert_obj
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     15
+            lbz     zds_loadw
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     16
+            lbz     zds_loadb
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     17
             lbz     zds_get_prop
             mov     rf, zdisp_instr+ZDI_OPCODE
@@ -441,6 +452,18 @@ zds_var:
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             lbz     zds_call            ; opcode 0
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     1
+            lbz     zds_storew
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     2
+            lbz     zds_storeb
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     3
+            lbz     zds_put_prop
             stc
             rtn
 
@@ -941,6 +964,87 @@ zds_call:
             call    zdisp_do_call
             rtn
 
+; ---- storew / storeb: operand[0]=array base (guest), operand[1]=
+; index, operand[2]=value -- write the word/byte at array + 2*index /
+; array + index; no store, no branch ----
+zds_storew:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (array base)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (word index)
+            mov     rf, zdisp_operand+4
+            lda     rf
+            phi     rb
+            ldn     rf
+            plo     rb                  ; rb = operand[2] (value)
+
+            shl16   ra                  ; ra = index * 2
+            add16   r9, ra              ; r9 = array + 2*index
+
+            mov     rd, r9
+            mov     rf, rb
+            call    zmwrite16
+            rtn
+
+zds_storeb:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (array base)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (byte index)
+            mov     rf, zdisp_operand+4
+            lda     rf
+            phi     rb
+            ldn     rf
+            plo     rb                  ; rb = operand[2] (value)
+
+            add16   r9, ra              ; r9 = array + index
+
+            mov     rd, r9
+            mov     rf, rb
+            call    zmwrite
+            rtn
+
+; ---- put_prop: operand[0]=object, operand[1]=property, operand[2]=
+; value; no store, no branch ----
+zds_put_prop:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (object)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (property)
+            mov     rf, zdisp_operand+4
+            lda     rf
+            phi     rb
+            ldn     rf
+            plo     rb                  ; rb = operand[2] (value)
+
+            mov     rd, r9
+            mov     rf, rb              ; rf = value -- set before the
+                                        ; D-setting glo below (a
+                                        ; register-to-register mov
+                                        ; clobbers D too)
+            glo     ra                  ; d = property, last before
+                                        ; the call
+            call    zprop_put
+            rtn
+
 ; ---- print: decode and emit this instruction's own inline text ----
 zds_print:
             call    zdisp_print_inline
@@ -1039,6 +1143,60 @@ zds_insert_obj:
             mov     rd, r9
             glo     ra
             call    zobj_insert
+            rtn
+
+; ---- loadw / loadb: operand[0]=array base (guest), operand[1]=index
+; -> store the word/byte at array + 2*index / array + index ----
+zds_loadw:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (array base)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (word index)
+
+            shl16   ra                  ; ra = index * 2
+            add16   r9, ra              ; r9 = array + 2*index
+
+            mov     rd, r9
+            call    zmread16            ; rf = value, df=err
+            lbdf    zds_error
+
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+zds_loadb:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (array base)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (byte index)
+
+            add16   r9, ra              ; r9 = array + index
+
+            mov     rd, r9
+            call    zmread              ; d = byte, df=err
+            lbdf    zds_error
+
+            plo     rc
+            ldi     0
+            phi     rc                  ; rc = 0:byte (zero-extended)
+            mov     rf, rc
+
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
             rtn
 
 ; ---- get_prop: RD=object, D=property -> RF=value, store ----

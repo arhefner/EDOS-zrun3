@@ -19,6 +19,7 @@
 
             extrn   zprop_get_addr
             extrn   zprop_get_len
+            extrn   zprop_put
 
 ; zprop_get_addr: RD = object, D = property (set immediately before
 ; the call, 1-31). Returns RF = the property's data address, or 0 if
@@ -219,6 +220,74 @@ zpgn_report:
             rtn
 
 zpgn_notfound:
+            stc
+            rtn
+            endp
+
+; zprop_put: RD = object, D = property, RF = value (all set
+; immediately before the call, property 1-31). Writes into the
+; property's own existing data (never creates or resizes an entry --
+; matches host/properties.c's own prop_put). DF=1 if the property is
+; absent, or its length isn't 1 or 2 (the only lengths put_prop can
+; legally target).
+            proc    zprop_put
+            plo     r7                  ; r7.0 = property -- survives
+                                        ; the call below (zprop_get_addr
+                                        ; clobbers R8/R9/RC/RF/RD/D, not
+                                        ; R7 or RA)
+            mov     ra, rf              ; ra = value -- also survives
+                                        ; zprop_get_addr
+            glo     r7
+            call    zprop_get_addr      ; rf = data address (0 if
+                                        ; absent)
+            glo     rf
+            lbnz    zpp_have_addr
+            ghi     rf
+            lbnz    zpp_have_addr
+            stc
+            rtn                         ; absent
+
+zpp_have_addr:
+            mov     r7, rf              ; r7 = addr (property no longer
+                                        ; needed once addr is known,
+                                        ; matching zprop_get's own
+                                        ; precedent)
+            mov     rd, rf
+            call    zprop_get_len       ; d = length
+            plo     rb                  ; rb.0 = length -- stashed
+                                        ; before comparing (zprop_get_len
+                                        ; doesn't touch r7/ra/rb, so this
+                                        ; stash isn't strictly needed,
+                                        ; but keeps the two comparisons
+                                        ; below symmetric and safe
+                                        ; against a future change to
+                                        ; zprop_get_len's own footprint)
+            smi     1
+            lbnz    zpp_check_word
+
+            ; length == 1: single-byte write
+            mov     rf, r7
+            glo     ra
+            str     rf
+            clc
+            rtn
+
+zpp_check_word:
+            glo     rb
+            smi     2
+            lbnz    zpp_bad_len         ; length is neither 1 nor 2
+
+            ; length == 2: big-endian word write
+            mov     rf, r7
+            ghi     ra
+            str     rf
+            inc     rf
+            glo     ra
+            str     rf
+            clc
+            rtn
+
+zpp_bad_len:
             stc
             rtn
             endp
