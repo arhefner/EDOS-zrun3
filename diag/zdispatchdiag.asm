@@ -82,11 +82,15 @@
             extrn   zdd_mem8
             extrn   zdd_stack8
             extrn   zdd_frames8
+            extrn   zdd_mem9
+            extrn   zdd_stack9
+            extrn   zdd_frames9
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
+            extrn   zdd_canned_input
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     9
+ZDDIAG_COUNT:   equ     10
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -3236,6 +3240,374 @@ zc8_zero_loop:
 zv_fail8:   mov     rb, zdd_results+8
             ldi     1
 zv_store8:  str     rb
+
+; ---- check 9: random and sread -- exercises zrand_step's xorshift32
+; PRNG (deterministic once reseeded via random(-99), matching a Python
+; simulation of the same algorithm) and zdisp_umod16's general 16-bit
+; modulo, plus sread's full header-dictionary-lookup -> zdict_init ->
+; zparse_init -> zparse_tokenize -> real-to-guest entry_addr
+; translation pipeline. Reuses diag/zdictdiag.asm's own hardware-
+; verified 3-entry dictionary ("cat"/"dog"/"run") verbatim, and a
+; canned "cat dog" input via this file's own zdisp_read_line test
+; double (see its own header for why the real zterm_read_line-backed
+; one isn't used here). ----
+; ---- check 9: setup ----
+            mov     rd, zdd_mem9
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack9
+            mov     rf, zdd_stack9+16
+            call    zstack_init
+            mov     rd, $00e0
+            mov     rf, zdd_frames9
+            mov     rc, zdd_frames9+36
+            call    zvar_init
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9
+            mov     rd, r9
+            call    zobj_init
+
+            mov     rf, zdd_mem9
+            mov     r8, 256
+zc9_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            sub16   r8, 1
+            glo     r8
+            lbnz    zc9_zero_loop
+            ghi     r8
+            lbnz    zc9_zero_loop
+
+; ---- check 9: story header (dictionary address @ guest 8) ----
+            mov     rf, zdd_mem9
+            add16   rf, $08
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $30              ; dictionary at guest $30
+            str     rf
+
+; ---- check 9: dictionary table (reused verbatim from diag/zdictdiag.asm's own hardware-verified zt_dict: "cat"/"dog"/"run") ----
+            mov     rf, zdd_mem9
+            add16   rf, $30
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $2c
+            str     rf
+            inc     rf
+            ldi     $07
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $20
+            str     rf
+            inc     rf
+            ldi     $d9
+            str     rf
+            inc     rf
+            ldi     $94
+            str     rf
+            inc     rf
+            ldi     $a5
+            str     rf
+            inc     rf
+            ldi     $aa
+            str     rf
+            inc     rf
+            ldi     $bb
+            str     rf
+            inc     rf
+            ldi     $cc
+            str     rf
+            inc     rf
+            ldi     $26
+            str     rf
+            inc     rf
+            ldi     $8c
+            str     rf
+            inc     rf
+            ldi     $94
+            str     rf
+            inc     rf
+            ldi     $a5
+            str     rf
+            inc     rf
+            ldi     $dd
+            str     rf
+            inc     rf
+            ldi     $ee
+            str     rf
+            inc     rf
+            ldi     $ff
+            str     rf
+            inc     rf
+            ldi     $5f
+            str     rf
+            inc     rf
+            ldi     $53
+            str     rf
+            inc     rf
+            ldi     $94
+            str     rf
+            inc     rf
+            ldi     $a5
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $22
+            str     rf
+            inc     rf
+            ldi     $33
+            str     rf
+
+; ---- check 9: text buffer (max_length=20 @ guest $60) and parse buffer (max_words=4 @ guest $80) headers ----
+            mov     rf, zdd_mem9
+            add16   rf, $60
+            ldi     20
+            str     rf
+
+            mov     rf, zdd_mem9
+            add16   rf, $80
+            ldi     4
+            str     rf
+
+; ---- check 9: program bytes ----
+            mov     rf, zdd_mem9
+            add16   rf, $a0
+            ldi     $e7
+            str     rf
+            inc     rf
+            ldi     $3f
+            str     rf
+            inc     rf
+            ldi     $ff
+            str     rf
+            inc     rf
+            ldi     $9d
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $e7
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $e7
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $e7
+            str     rf
+            inc     rf
+            ldi     $3f
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $e8
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $e4
+            str     rf
+            inc     rf
+            ldi     $5f
+            str     rf
+            inc     rf
+            ldi     $60
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $00a0
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $a0
+            str     rf
+
+; ---- check 9: steps ----
+            call    zdisp_step              ; random(-99)->g16[0] -> pc=$a5
+            lbdf    zv_fail9
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail9
+            ldn     rf
+            xri     $a5
+            lbnz    zv_fail9
+
+            call    zdisp_step              ; random(10)->g17[6] -> pc=$a9
+            lbdf    zv_fail9
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail9
+            ldn     rf
+            xri     $a9
+            lbnz    zv_fail9
+
+            call    zdisp_step              ; random(10)->g18[6] -> pc=$ad
+            lbdf    zv_fail9
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail9
+            ldn     rf
+            xri     $ad
+            lbnz    zv_fail9
+
+            call    zdisp_step              ; random(1000)->g19[360] -> pc=$b2
+            lbdf    zv_fail9
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail9
+            ldn     rf
+            xri     $b2
+            lbnz    zv_fail9
+
+            call    zdisp_step              ; sread($60,$80) -> pc=$b6
+            lbdf    zv_fail9
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail9
+            ldn     rf
+            xri     $b6
+            lbnz    zv_fail9
+
+            call    zdisp_step              ; quit -> pc=$b7
+            lbdf    zv_fail9
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail9
+            ldn     rf
+            xri     $b7
+            lbnz    zv_fail9
+
+; ---- check 9: globals ----
+            ; global16 addr=$00e0 (random(-99) reseed)
+            mov     rf, zdd_mem9
+            add16   rf, $00e0
+            ldn     rf
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail9
+
+            ; global17 addr=$00e2 (random(10) draw 1)
+            mov     rf, zdd_mem9
+            add16   rf, $00e2
+            ldn     rf
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     $06
+            lbnz    zv_fail9
+
+            ; global18 addr=$00e4 (random(10) draw 2)
+            mov     rf, zdd_mem9
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     $06
+            lbnz    zv_fail9
+
+            ; global19 addr=$00e6 (random(1000) draw 3 [360])
+            mov     rf, zdd_mem9
+            add16   rf, $00e6
+            ldn     rf
+            xri     $01
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     $68
+            lbnz    zv_fail9
+
+; ---- check 9: parse buffer (word_count, then 4 bytes/word: entry_addr hi/lo, length, position) ----
+            ; word_count == 2
+            mov     rf, zdd_mem9
+            add16   rf, $81
+            ldn     rf
+            xri     2
+            lbnz    zv_fail9
+
+            ; word[0] = "cat": entry_addr=$35 (dict $30 + offset 5), length=3, position=1
+            mov     rf, zdd_mem9
+            add16   rf, $82
+            ldn     rf
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     $35
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     3
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     1
+            lbnz    zv_fail9
+
+            ; word[1] = "dog": entry_addr=$3c (dict $30 + offset 12), length=3, position=5
+            mov     rf, zdd_mem9
+            add16   rf, $86
+            ldn     rf
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     $3c
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     3
+            lbnz    zv_fail9
+            inc     rf
+            ldn     rf
+            xri     5
+            lbnz    zv_fail9
+            mov     rb, zdd_results+9
+            ldi     0
+            lbr     zv_store9
+zv_fail9:   mov     rb, zdd_results+9
+            ldi     1
+zv_store9:  str     rb
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -3298,6 +3670,30 @@ zdet_copy_done:
             rtn
             endp
 
+; zdisp_read_line (test double, replacing lib/zdispread.asm's real
+; zterm_read_line-backed one for this bare-metal-testable build): RD =
+; real text buffer address (byte 0 = max length, ignored here -- this
+; is a controlled test scenario, not real user input). Writes a fixed
+; canned string into buf+1, NUL-terminated, always DF=0 (never
+; "aborted").
+            proc    zdisp_read_line
+            mov     r8, rd
+            inc     r8                  ; r8 = buffer+1
+            mov     r9, zdd_canned_input
+zdrl_copy:
+            ldn     r9
+            lbz     zdrl_copy_done
+            str     r8
+            inc     r8
+            inc     r9
+            lbr     zdrl_copy
+zdrl_copy_done:
+            ldn     r9                  ; d = 0 (the nul)
+            str     r8
+            clc
+            rtn
+            endp
+
             proc    _zdispatchdiag_data
 zdd_mem0:       ds      64
 zdd_stack0:     ds      16
@@ -3326,8 +3722,12 @@ zdd_frames7:    ds      36                  ; 1 frame * 36 bytes
 zdd_mem8:       ds      256
 zdd_stack8:     ds      16
 zdd_frames8:    ds      72                  ; 2 frames * 36 bytes
+zdd_mem9:       ds      256
+zdd_stack9:     ds      16
+zdd_frames9:    ds      36                  ; 1 frame * 36 bytes
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
+zdd_canned_input: db    "cat dog",0
 zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem0
                 public  zdd_stack0
@@ -3356,7 +3756,11 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem8
                 public  zdd_stack8
                 public  zdd_frames8
+                public  zdd_mem9
+                public  zdd_stack9
+                public  zdd_frames9
                 public  zdd_captured_text
                 public  zdd_capture_cursor
+                public  zdd_canned_input
                 public  zdd_results
             endp

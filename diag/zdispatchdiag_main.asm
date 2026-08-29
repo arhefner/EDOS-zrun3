@@ -86,12 +86,17 @@ zd_store_flag:
             mov     rb, zdd_results+8
             call    zd_report
 
+            call    K_INMSG
+            db      "check 9 (random, sread): ",0
+            mov     rb, zdd_results+9
+            call    zd_report
+
             mov     rf, zd_had_failure
             ldn     rf
             lbnz    zd_some_failed
 
             call    K_INMSG
-            db      "All 9 checks passed.",13,10,0
+            db      "All 10 checks passed.",13,10,0
             ldi     0
             lbr     zd_exit
 

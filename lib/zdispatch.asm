@@ -108,6 +108,10 @@
             extrn   zprop_get_next
             extrn   zprop_put
             extrn   ym_fmt_uint32
+            extrn   zdict_init
+            extrn   zparse_init
+            extrn   zparse_tokenize
+            extrn   zdisp_read_line
 
             extrn   zdisp_branch
             extrn   zdisp_return
@@ -116,6 +120,14 @@
             extrn   zdisp_store_and_branch_nonzero
             extrn   zdisp_slt
             extrn   zdisp_print_at
+            extrn   zrand_step
+            extrn   zrand_shl32
+            extrn   zrand_shr32
+            extrn   zrand_stash
+            extrn   zrand_xor_tmp
+            extrn   zdisp_umod16
+            extrn   zrand_state
+            extrn   zrand_tmp
 
             extrn   zdisp_pc
             extrn   zdisp_quit
@@ -491,12 +503,20 @@ zds_var:
             lbz     zds_put_prop
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     4
+            lbz     zds_sread
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     5
             lbz     zds_print_char
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             xri     6
             lbz     zds_print_num
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     7
+            lbz     zds_random
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             xri     8
@@ -1192,6 +1212,291 @@ zds_pull:
             ldn     r8                  ; d = variable number
             call    zvar_write_indirect
             rtn
+
+; ---- random: operand[0] > 0 draws 1..operand[0] via zrand_step +
+; zdisp_umod16; operand[0] == 0 reseeds from zdisp_pc (no true entropy
+; source without a kernel hook -- see zrand_step's own header); < 0
+; reseeds deterministically from the magnitude, matching host's own
+; vm_random. Seeding calls always store/return 0. ----
+zds_random:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (signed range)
+
+            glo     r9
+            lbnz    zdr_check_sign
+            ghi     r9
+            lbnz    zdr_check_sign
+            lbr     zdr_reseed_zero
+
+zdr_check_sign:
+            ghi     r9
+            ani     $80
+            lbnz    zdr_reseed_negative
+            lbr     zdr_draw
+
+zdr_reseed_zero:
+            mov     r8, zdisp_pc
+            lda     r8
+            phi     ra
+            ldn     r8
+            ori     1
+            plo     ra                  ; ra = zdisp_pc | 1 (guaranteed
+                                        ; odd, so nonzero)
+
+            mov     r9, zrand_state
+            ldi     $9e
+            str     r9
+            inc     r9
+            ldi     $37
+            str     r9                  ; hi word = fixed constant
+            inc     r9
+            ghi     ra
+            str     r9
+            inc     r9
+            glo     ra
+            str     r9                  ; lo word = zdisp_pc | 1
+            lbr     zdr_store_zero
+
+zdr_reseed_negative:
+            ghi     r9
+            not
+            phi     r9
+            glo     r9
+            not
+            plo     r9
+            add16   r9, 1               ; r9 = magnitude (negate)
+            glo     r9
+            ori     1
+            plo     r9                  ; ensure odd/nonzero
+
+            mov     ra, zrand_state
+            ldi     0
+            str     ra
+            inc     ra
+            ldi     0
+            str     ra                  ; hi word = 0
+            inc     ra
+            ghi     r9
+            str     ra
+            inc     ra
+            glo     r9
+            str     ra                  ; lo word = magnitude | 1
+
+zdr_store_zero:
+            mov     rf, 0
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+zdr_draw:
+            mov     r8, zdisp_value
+            ghi     r9
+            str     r8
+            inc     r8
+            glo     r9
+            str     r8                  ; zdisp_value = range (stashed
+                                        ; across zrand_step, which
+                                        ; clobbers everything)
+
+            call    zrand_step          ; rd:r8 = new 32-bit state
+
+            mov     rd, r8              ; rd = low 16 bits of the new
+                                        ; state (the draw source -- see
+                                        ; zrand_step's own header on
+                                        ; why only the low word is
+                                        ; used, unlike host's exact
+                                        ; 32-bit modulo)
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = range, reloaded fresh
+            call    zdisp_umod16        ; rd = draw mod range
+            add16   rd, 1               ; rd = 1..range
+
+            mov     rf, rd
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- sread: reads a line into the text buffer at operand[0] (byte 0
+; = max length, characters start at byte 1, V3 has no length byte),
+; lowercased and NUL-terminated by zdisp_read_line, then tokenizes it
+; into the parse buffer at operand[1] via zdict_init + zparse_init +
+; zparse_tokenize. Both zdict.asm and zparse.asm, like zobj.asm/
+; zprop.asm, operate entirely on REAL addresses with no zmbase
+; translation of their own (confirmed against diag/zdictdiag.asm's own
+; check 6, which asserts zdict_find_word returns zt_dict+12 -- a REAL
+; linked address, not a story-relative one), so the parse buffer's own
+; entry_addr fields (as written by zparse_tokenize) are translated
+; real->guest here, at the dispatch boundary, exactly like
+; get_prop_addr's own translation. No store, no branch (V3's sread has
+; neither). ----
+zds_sread:
+            mov     rd, 8
+            call    zmread16            ; rf = dictionary guest addr,
+                                        ; df=err
+            lbdf    zds_error
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = zmbase
+            add16   rf, r9              ; rf = real dictionary address
+
+            mov     rd, rf
+            call    zdict_init          ; clobbers R7-R9/RB/RF
+
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (text
+                                        ; buffer, guest)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (parse
+                                        ; buffer, guest)
+
+            mov     r8, zmbase
+            lda     r8
+            phi     rb
+            ldn     r8
+            plo     rb                  ; rb = zmbase
+            add16   r9, rb              ; r9 = real text buffer addr
+            add16   ra, rb              ; ra = real parse buffer addr
+
+            mov     r8, zdisp_value
+            ghi     r9
+            str     r8
+            inc     r8
+            glo     r9
+            str     r8                  ; zdisp_value = real text
+                                        ; buffer addr
+            mov     r8, zdisp_value2
+            ghi     ra
+            str     r8
+            inc     r8
+            glo     ra
+            str     r8                  ; zdisp_value2 = real parse
+                                        ; buffer addr
+
+            mov     rd, r9
+            call    zdisp_read_line     ; df=1 on abort/error
+            lbdf    zds_error
+
+; measure the read length by scanning for the NUL zdisp_read_line
+; left after the character data
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf
+            add16   rf, 1               ; rf = real addr of char data
+                                        ; (buf+1)
+            mov     r9, rf              ; r9 = char data start --
+                                        ; survives the scan below
+                                        ; (nothing in it calls anything)
+            ldi     0
+            plo     rc
+            phi     rc                  ; rc = 0 (length counter)
+zdsr_count:
+            ldn     rf
+            lbz     zdsr_have_len
+            inc     rf
+            inc     rc
+            lbr     zdsr_count
+zdsr_have_len:
+                                        ; rc.0 = read length (always
+                                        ; < 256: max_length is a byte)
+
+            mov     rd, r9              ; rd = char data start
+                                        ; (zparse_init's text address)
+            mov     r8, zdisp_value2
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = real parse buffer addr
+            ldi     1
+            phi     rc                  ; rc.hi = text_offset = 1
+                                        ; (skips the 1-byte max-length
+                                        ; header, matching host's own
+                                        ; sread call); rc.lo = length,
+                                        ; untouched
+            call    zparse_init
+            call    zparse_tokenize     ; df=1 only if a word is
+                                        ; unencodable
+            lbdf    zds_error
+
+; translate each parsed word's entry_addr field from real to guest --
+; word_count lives at parse_addr+1, entries start at parse_addr+2,
+; 4 bytes each (entry_addr hi/lo, length, position)
+            mov     r8, zdisp_value2
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = real parse buffer addr
+            inc     rf
+            ldn     rf                  ; d = word_count
+            plo     rb
+            ldi     0
+            phi     rb                  ; rb = 0:word_count
+
+            mov     r8, zdisp_value2
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9
+            add16   r9, 2               ; r9 = real addr of entry[0]
+
+            mov     r8, zmbase
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = zmbase
+
+zdsr_xlate_loop:
+            glo     rb
+            lbnz    zdsr_xlate_have
+            ghi     rb
+            lbnz    zdsr_xlate_have
+            clc
+            rtn                         ; word_count == 0: done
+
+zdsr_xlate_have:
+            mov     rf, r9
+            lda     rf
+            phi     rc
+            ldn     rf
+            plo     rc                  ; rc = this entry's addr field
+                                        ; (real, or 0 if absent)
+
+            glo     rc
+            lbnz    zdsr_xlate_do
+            ghi     rc
+            lbz     zdsr_xlate_skip     ; absent (0): don't translate
+
+zdsr_xlate_do:
+            sub16   rc, ra              ; rc = real - zmbase = guest
+            mov     rf, r9
+            ghi     rc
+            str     rf
+            inc     rf
+            glo     rc
+            str     rf
+
+zdsr_xlate_skip:
+            add16   r9, 4               ; r9 = next entry
+            dec     rb
+            lbr     zdsr_xlate_loop
 
 ; ---- print: decode and emit this instruction's own inline text ----
 zds_print:
@@ -2231,6 +2536,231 @@ zdpa_fail:
             rtn
             endp
 
+; zrand_shl32 (internal): RD:R8 = 32-bit value (RD=high word, R8=low
+; word), D = shift count 0-31 (set immediately before the call).
+; Returns RD:R8 = value << count, zero-filled, via native SHL/SHLC
+; (matches lib/fmt32.asm's own _div32_by10 shift technique).
+            proc    zrand_shl32
+            plo     r7                  ; r7.0 = remaining count
+zrsl_loop:
+            glo     r7
+            lbz     zrsl_done
+
+            glo     r8
+            shl
+            plo     r8
+            ghi     r8
+            shlc
+            phi     r8
+            glo     rd
+            shlc
+            plo     rd
+            ghi     rd
+            shlc
+            phi     rd
+
+            dec     r7
+            lbr     zrsl_loop
+zrsl_done:
+            rtn
+            endp
+
+; zrand_shr32 (internal): RD:R8 = 32-bit value, D = shift count 0-31
+; (set immediately before the call). Returns RD:R8 = value >> count,
+; zero-filled, via native SHR/SHRC (the mirror-image walk, high byte
+; to low byte).
+            proc    zrand_shr32
+            plo     r7
+zrsr_loop:
+            glo     r7
+            lbz     zrsr_done
+
+            ghi     rd
+            shr
+            phi     rd
+            glo     rd
+            shrc
+            plo     rd
+            ghi     r8
+            shrc
+            phi     r8
+            glo     r8
+            shrc
+            plo     r8
+
+            dec     r7
+            lbr     zrsr_loop
+zrsr_done:
+            rtn
+            endp
+
+; zrand_stash (internal): stores RD:R8 into zrand_tmp.
+            proc    zrand_stash
+            mov     r9, zrand_tmp
+            ghi     rd
+            str     r9
+            inc     r9
+            glo     rd
+            str     r9
+            inc     r9
+            ghi     r8
+            str     r9
+            inc     r9
+            glo     r8
+            str     r9
+            rtn
+            endp
+
+; zrand_xor_tmp (internal): RD:R8 ^= the 4 bytes at zrand_tmp, in
+; place.
+            proc    zrand_xor_tmp
+            mov     r9, zrand_tmp
+            lda     r9
+            str     r2
+            ghi     rd
+            xor
+            phi     rd
+            lda     r9
+            str     r2
+            glo     rd
+            xor
+            plo     rd
+            lda     r9
+            str     r2
+            ghi     r8
+            xor
+            phi     r8
+            ldn     r9
+            str     r2
+            glo     r8
+            xor
+            plo     r8
+            rtn
+            endp
+
+; zrand_step (internal, no arguments): advances zrand_state via the
+; xorshift32 algorithm (x^=x<<13; x^=x>>17; x^=x<<5 -- same constants
+; and technique as host/vm_state.c's own xorshift32), persisting the
+; new state and returning it in RD:R8 (RD=high word, R8=low word).
+; zds_random only consumes R8 (the low 16 bits) for its own modulo
+; draw -- unlike host's exact 32-bit modulo, this port draws from the
+; low word alone, a deliberate simplification (the Z-machine standard
+; doesn't mandate bit-exact PRNG behavior, only plausible randomness)
+; made to avoid a 32-by-16 divide when a 16-by-16 one (zdisp_umod16,
+; also reusable for the still-deferred div/mod opcodes) already
+; suffices.
+            proc    zrand_step
+            mov     r9, zrand_state
+            lda     r9
+            phi     rd
+            lda     r9
+            plo     rd
+            lda     r9
+            phi     r8
+            ldn     r9
+            plo     r8                  ; rd:r8 = current state
+
+            call    zrand_stash
+            ldi     13
+            call    zrand_shl32
+            call    zrand_xor_tmp       ; x ^= x << 13
+
+            call    zrand_stash
+            ldi     17
+            call    zrand_shr32
+            call    zrand_xor_tmp       ; x ^= x >> 17
+
+            call    zrand_stash
+            ldi     5
+            call    zrand_shl32
+            call    zrand_xor_tmp       ; x ^= x << 5
+
+            mov     r9, zrand_state
+            ghi     rd
+            str     r9
+            inc     r9
+            glo     rd
+            str     r9
+            inc     r9
+            ghi     r8
+            str     r9
+            inc     r9
+            glo     r8
+            str     r9                  ; persist the new state
+
+            clc
+            rtn
+            endp
+
+; zdisp_umod16 (internal): RD = dividend, RF = divisor, both 16-bit
+; unsigned (set immediately before the call). Returns RD = dividend
+; mod divisor. DF=1 if divisor is 0. 16-iteration restoring bit-by-bit
+; division (same technique as lib/fmt32.asm's own _div32_by10,
+; generalized from a fixed divisor to a runtime one, and from a
+; 32-bit/8-bit-remainder shape to 16-bit/16-bit-remainder, since a
+; general divisor's remainder no longer fits in one byte).
+            proc    zdisp_umod16
+            glo     rf
+            lbnz    zum_have_divisor
+            ghi     rf
+            lbnz    zum_have_divisor
+            stc
+            rtn
+
+zum_have_divisor:
+            mov     r7, rd              ; r7 = dividend (shifted left
+                                        ; one bit per iteration)
+            ldi     16
+            plo     rb                  ; rb.0 = iteration count
+            ldi     0
+            plo     rc
+            phi     rc                  ; rc = 0 (16-bit remainder
+                                        ; accumulator)
+
+zum_loop:
+            glo     rb
+            lbz     zum_done
+
+            glo     r7
+            shl
+            plo     r7
+            ghi     r7
+            shlc
+            phi     r7                  ; r7 <<= 1; DF = bit that fell
+                                        ; off bit15
+
+            glo     rc
+            shlc
+            plo     rc                  ; rc.lo <<= 1, carry-in = the
+                                        ; bit that fell off r7
+            ghi     rc
+            shlc
+            phi     rc                  ; rc.hi <<= 1, carry-in = the
+                                        ; bit that fell off rc.lo --
+                                        ; low-to-high order, same
+                                        ; chaining direction as r7's
+                                        ; own shift above and
+                                        ; zrand_shl32's (this was
+                                        ; backwards before: shifting
+                                        ; rc.hi first fed r7's outgoing
+                                        ; bit into the wrong end)
+
+            mov     r8, rc
+            sub16   r8, rf              ; r8 = rc - rf; DF=1 (no
+                                        ; borrow) means rc >= rf
+            lbnf    zum_no_sub
+            mov     rc, r8              ; commit: rc -= rf
+
+zum_no_sub:
+            dec     rb
+            lbr     zum_loop
+
+zum_done:
+            mov     rd, rc
+            clc
+            rtn
+            endp
+
             proc    _zdispatch_data
 zdisp_pc:            dw      0
 zdisp_quit:           db      0
@@ -2266,6 +2796,16 @@ zdisp_num_buf:                 ds      12      ; print_num's own
                                               ; '-' + up to 10 digits
                                               ; (ym_fmt_uint32's own
                                               ; documented minimum) + NUL
+zrand_state:                   dw      $9e37, $79b9   ; xorshift32's
+                                              ; own state -- fixed
+                                              ; nonzero default seed
+                                              ; (no entropy source at
+                                              ; program start; see
+                                              ; zrand_step's own header
+                                              ; for the range==0
+                                              ; reseed path)
+zrand_tmp:                     ds      4       ; zrand_stash/xor_tmp's
+                                              ; own 32-bit scratch
 
                 public  zdisp_pc
                 public  zdisp_quit
@@ -2282,4 +2822,6 @@ zdisp_num_buf:                 ds      12      ; print_num's own
                 public  zdisp_newline_buf
                 public  zdisp_char_buf
                 public  zdisp_num_buf
+                public  zrand_state
+                public  zrand_tmp
             endp
