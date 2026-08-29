@@ -84,6 +84,7 @@
             extrn   zdecode_instruction
             extrn   zdec_decode
             extrn   zvar_read
+            extrn   zvar_read_indirect
             extrn   zvar_write
             extrn   zvar_write_indirect
             extrn   zvar_frame_push
@@ -108,12 +109,14 @@
             extrn   zdisp_do_call
             extrn   zdisp_print_inline
             extrn   zdisp_store_and_branch_nonzero
+            extrn   zdisp_slt
 
             extrn   zdisp_pc
             extrn   zdisp_quit
             extrn   zdisp_i
             extrn   zdisp_next_pc
             extrn   zdisp_value
+            extrn   zdisp_value2
             extrn   zdisp_routine_addr
             extrn   zdisp_local_count
             extrn   zdisp_instr
@@ -283,6 +286,38 @@ zds_2op:
             lbz     zds_je
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     2
+            lbz     zds_jl
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     3
+            lbz     zds_jg
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     4
+            lbz     zds_dec_chk
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     5
+            lbz     zds_inc_chk
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     6
+            lbz     zds_jin
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     7
+            lbz     zds_test
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     8
+            lbz     zds_or
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     9
+            lbz     zds_and
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     10
             lbz     zds_test_attr
             mov     rf, zdisp_instr+ZDI_OPCODE
@@ -346,6 +381,14 @@ zds_1op:
             lbz     zds_get_prop_len
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     5
+            lbz     zds_inc
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     6
+            lbz     zds_dec
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     9
             lbz     zds_remove_obj
             mov     rf, zdisp_instr+ZDI_OPCODE
@@ -356,6 +399,14 @@ zds_1op:
             ldn     rf
             xri     12
             lbz     zds_jump
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     14
+            lbz     zds_load
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     15
+            lbz     zds_not
             stc
             rtn
 
@@ -521,6 +572,284 @@ zds_sub:
             plo     ra                  ; ra = operand[1]
             sub16   r9, ra              ; r9 = operand[0] - operand[1]
             mov     rf, r9
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- jl / jg: branch on signed 16-bit comparison, via the shared
+; zdisp_slt helper ----
+zds_jl:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0]
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1]
+
+            mov     rd, r9
+            mov     rf, ra
+            call    zdisp_slt           ; d = (operand[0] < operand[1])
+            call    zdisp_branch
+            rtn
+
+zds_jg:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0]
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1]
+
+            mov     rd, ra
+            mov     rf, r9
+            call    zdisp_slt           ; d = (operand[1] < operand[0])
+                                        ; == (operand[0] > operand[1])
+            call    zdisp_branch
+            rtn
+
+; ---- dec_chk / inc_chk: operand[0] is a variable NUMBER (its own
+; resolved value's low byte, re-read fresh from zdisp_operand+1
+; before each call below rather than trusted in a register, since
+; zvar_read_indirect/zvar_write_indirect clobber nearly everything --
+; see zvar.asm's own header), adjusted indirectly by 1; branch on a
+; signed comparison against operand[1] ----
+zds_dec_chk:
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (threshold)
+            mov     r8, zdisp_value2
+            ghi     ra
+            str     r8
+            inc     r8
+            glo     ra
+            str     r8                  ; zdisp_value2 = threshold
+
+            mov     rf, zdisp_operand+1
+            ldn     rf                  ; d = variable number
+            call    zvar_read_indirect  ; rf = current, df=err
+            lbdf    zds_error
+
+            sub16   rf, 1               ; rf = updated = current - 1
+            mov     r8, zdisp_value
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_value = updated
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = updated, reloaded fresh
+            mov     r8, zdisp_operand+1
+            ldn     r8                  ; d = variable number (re-read,
+                                        ; last before the call)
+            call    zvar_write_indirect
+            lbdf    zds_error
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rd
+            ldn     r8
+            plo     rd                  ; rd = updated
+            mov     r8, zdisp_value2
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = threshold
+            call    zdisp_slt           ; d = (updated < threshold)
+            call    zdisp_branch
+            rtn
+
+zds_inc_chk:
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (threshold)
+            mov     r8, zdisp_value2
+            ghi     ra
+            str     r8
+            inc     r8
+            glo     ra
+            str     r8                  ; zdisp_value2 = threshold
+
+            mov     rf, zdisp_operand+1
+            ldn     rf                  ; d = variable number
+            call    zvar_read_indirect  ; rf = current, df=err
+            lbdf    zds_error
+
+            add16   rf, 1               ; rf = updated = current + 1
+            mov     r8, zdisp_value
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_value = updated
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = updated, reloaded fresh
+            mov     r8, zdisp_operand+1
+            ldn     r8                  ; d = variable number (re-read,
+                                        ; last before the call)
+            call    zvar_write_indirect
+            lbdf    zds_error
+
+            mov     r8, zdisp_value2
+            lda     r8
+            phi     rd
+            ldn     r8
+            plo     rd                  ; rd = threshold
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = updated
+            call    zdisp_slt           ; d = (threshold < updated)
+                                        ; == (updated > threshold)
+            call    zdisp_branch
+            rtn
+
+; ---- jin: branch if operand[0]'s parent == operand[1] ----
+zds_jin:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (object)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (expected
+                                        ; parent)
+
+            mov     rd, r9
+            call    zobj_get_parent     ; d = actual parent
+            str     r2                  ; m(r2) = actual parent
+            glo     ra
+            xor                          ; zero iff actual == expected
+            lbnz    zdjin_false
+            ldi     1
+            lbr     zdjin_branch
+zdjin_false:
+            ldi     0
+zdjin_branch:
+            call    zdisp_branch
+            rtn
+
+; ---- test: branch if every bit set in operand[1] is also set in
+; operand[0] ----
+zds_test:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (bitmap)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (flags)
+
+            ghi     ra
+            str     r2
+            ghi     r9
+            and
+            phi     rc                  ; rc.hi = bitmap.hi & flags.hi
+            glo     ra
+            str     r2
+            glo     r9
+            and
+            plo     rc                  ; rc.lo = bitmap.lo & flags.lo
+
+            ghi     rc
+            str     r2
+            ghi     ra
+            xor
+            lbnz    zdt_false
+            glo     rc
+            str     r2
+            glo     ra
+            xor
+            lbnz    zdt_false
+            ldi     1
+            lbr     zdt_branch
+zdt_false:
+            ldi     0
+zdt_branch:
+            call    zdisp_branch
+            rtn
+
+; ---- or / and: bitwise, store ----
+zds_or:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            ghi     ra
+            str     r2
+            ghi     r9
+            or
+            phi     rc
+            glo     ra
+            str     r2
+            glo     r9
+            or
+            plo     rc
+
+            mov     rf, rc
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+zds_and:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            ghi     ra
+            str     r2
+            ghi     r9
+            and
+            phi     rc
+            glo     ra
+            str     r2
+            glo     r9
+            and
+            plo     rc
+
+            mov     rf, rc
             mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
             ldn     r8
             call    zvar_write
@@ -905,6 +1234,93 @@ zds_remove_obj:
             call    zobj_remove
             rtn
 
+; ---- inc / dec: operand[0] is a variable NUMBER (re-read fresh from
+; zdisp_operand+1 before each call, same reasoning as dec_chk/inc_chk
+; above), adjusted indirectly by 1; no store, no branch ----
+zds_inc:
+            mov     rf, zdisp_operand+1
+            ldn     rf                  ; d = variable number
+            call    zvar_read_indirect  ; rf = current, df=err
+            lbdf    zds_error
+
+            add16   rf, 1               ; rf = updated
+            mov     r8, zdisp_value
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_value = updated
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf
+            mov     r8, zdisp_operand+1
+            ldn     r8                  ; d = variable number (re-read,
+                                        ; last before the call)
+            call    zvar_write_indirect
+            rtn
+
+zds_dec:
+            mov     rf, zdisp_operand+1
+            ldn     rf                  ; d = variable number
+            call    zvar_read_indirect  ; rf = current, df=err
+            lbdf    zds_error
+
+            sub16   rf, 1               ; rf = updated
+            mov     r8, zdisp_value
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_value = updated
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf
+            mov     r8, zdisp_operand+1
+            ldn     r8                  ; d = variable number (re-read,
+                                        ; last before the call)
+            call    zvar_write_indirect
+            rtn
+
+; ---- load: operand[0] is a variable NUMBER, read indirectly; the
+; value read is stored via this instruction's own store_variable ----
+zds_load:
+            mov     rf, zdisp_operand+1
+            ldn     rf                  ; d = variable number
+            call    zvar_read_indirect  ; rf = value, df=err
+            lbdf    zds_error
+
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- not: bitwise complement, store ----
+zds_not:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0]
+
+            ghi     r9
+            not
+            phi     r9
+            glo     r9
+            not
+            plo     r9                  ; r9 = ~operand[0]
+
+            mov     rf, r9
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
 zds_error:
             stc
             rtn
@@ -962,6 +1378,49 @@ zdsb_branch:
 
 zdsb_fail:
             stc
+            rtn
+            endp
+
+; zdisp_slt (internal): RD = a, RF = b, both signed 16-bit (set
+; immediately before the call). Returns D = 1 if a < b, else D = 0 --
+; ready to feed straight into zdisp_branch's own D=condition
+; parameter. Flips both operands' sign bits (biasing signed order to
+; match the 1802's own unsigned SM/SMB order -- see this project's own
+; DF/borrow convention note) and does a plain unsigned sub16, then
+; treats a "no borrow but nonzero" result as strictly less-than
+; (borrow alone would mean b < a; a zero result means a == b, neither
+; of which is "a < b").
+            proc    zdisp_slt
+            mov     r8, rd
+            ghi     r8
+            xri     $80
+            phi     r8
+            glo     rd
+            plo     r8                  ; r8 = a, sign bit flipped
+
+            mov     r9, rf
+            ghi     r9
+            xri     $80
+            phi     r9
+            glo     rf
+            plo     r9                  ; r9 = b, sign bit flipped
+
+            mov     rb, r9
+            sub16   rb, r8              ; rb = biased_b - biased_a;
+                                        ; DF=1 (no borrow) means
+                                        ; biased_b >= biased_a, i.e.
+                                        ; a <= b
+            lbnf    zslt_false          ; DF=0: b < a, so a is not < b
+
+            glo     rb
+            lbnz    zslt_true
+            ghi     rb
+            lbnz    zslt_true           ; rb != 0: a < b strictly
+zslt_false:
+            ldi     0
+            rtn
+zslt_true:
+            ldi     1
             rtn
             endp
 
@@ -1364,6 +1823,11 @@ zdisp_quit:           db      0
 zdisp_i:              db      0
 zdisp_next_pc:         dw      0
 zdisp_value:            dw      0
+zdisp_value2:           dw      0       ; second scratch word, for
+                                        ; opcodes that need two 16-bit
+                                        ; values to survive a zvar_*
+                                        ; call (dec_chk/inc_chk's own
+                                        ; updated value + threshold)
 zdisp_routine_addr:      dw      0
 zdisp_local_count:        db      0
 zdisp_instr:               ds      ZDI_SIZE
@@ -1388,6 +1852,7 @@ zdisp_newline_buf:             db      10, 0   ; a constant 2-byte
                 public  zdisp_i
                 public  zdisp_next_pc
                 public  zdisp_value
+                public  zdisp_value2
                 public  zdisp_routine_addr
                 public  zdisp_local_count
                 public  zdisp_instr

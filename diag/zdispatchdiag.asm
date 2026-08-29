@@ -73,11 +73,14 @@
             extrn   zdd_mem5
             extrn   zdd_stack5
             extrn   zdd_frames5
+            extrn   zdd_mem6
+            extrn   zdd_stack6
+            extrn   zdd_frames6
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     6
+ZDDIAG_COUNT:   equ     7
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -1560,6 +1563,612 @@ zc5_zero_loop:
 zv_fail5:   mov     rb, zdd_results+5
             ldi     1
 zv_store5:  str     rb
+
+; ---- check 6: arithmetic and comparison opcodes (jl, jg, dec_chk,
+; inc_chk, jin, test, or, and, inc, dec, load, not) -- exercises
+; zdisp_slt's shared signed-16-bit-comparison helper (jl/jg directly,
+; dec_chk/inc_chk's own post-adjustment branch), zvar_read_indirect/
+; write_indirect's variable-NUMBER-operand handling (inc/dec/load/
+; dec_chk/inc_chk), and the bitwise or/and/not/test opcodes. Reuses a
+; minimal 2-object table (object2.parent=1) for jin. ----
+; ---- check 6: setup ----
+            mov     rd, zdd_mem6
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack6
+            mov     rf, zdd_stack6+16
+            call    zstack_init
+            mov     rd, $00e0
+            mov     rf, zdd_frames6
+            mov     rc, zdd_frames6+36
+            call    zvar_init
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9
+            mov     rd, r9
+            call    zobj_init
+
+            mov     rf, zdd_mem6
+            mov     r8, 256
+zc6_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            sub16   r8, 1
+            glo     r8
+            lbnz    zc6_zero_loop
+            ghi     r8
+            lbnz    zc6_zero_loop
+
+; ---- check 6: object table (object2.parent=1, object1 all-zero) ----
+            mov     rf, zdd_mem6
+            add16   rf, $4b         ; obj2 entry offset71: parent field at +4 = 75
+            ldi     $01
+            str     rf
+
+; ---- check 6: program bytes ----
+            mov     rf, zdd_mem6
+            add16   rf, $80
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $08
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $09
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $9f
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $95
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $96
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $96
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $9e
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $14
+            str     rf
+            inc     rf
+            ldi     $04
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $0f
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $15
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $9e
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $16
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $14
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $17
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $9e
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $18
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $19
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $1a
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $06
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $1b
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $07
+            str     rf
+            inc     rf
+            ldi     $0e
+            str     rf
+            inc     rf
+            ldi     $06
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $1c
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $1d
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $0080 (see check4's
+            ldi     0                       ; own note on why this
+            str     rf                      ; write is required)
+            inc     rf
+            ldi     $80
+            str     rf
+
+; ---- check 6: steps ----
+            call    zdisp_step              ; store(16,10) -> pc=$83
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $83
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; or(5,3)->g17[7] -> pc=$87
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $87
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; and(5,3)->g18[1] -> pc=$8b
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $8b
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; not(0)->g19[FFFF] -> pc=$8e
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $8e
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; inc(16) -> pc=$90
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $90
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; dec(16) -> pc=$92
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $92
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; dec(16)#2 -> pc=$94
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $94
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; load(16)->g20[9] -> pc=$97
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $97
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; dec_chk(16,15)[taken] -> pc=$9e
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $9e
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; load(16)->g22[8] -> pc=$a1
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $a1
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; inc_chk(16,20)[not taken] -> pc=$a5
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $a5
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; store(23,1)[land] -> pc=$a8
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $a8
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; load(16)->g24[9] -> pc=$ab
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $ab
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; jl(3,5)[taken] -> pc=$b2
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $b2
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; jg(5,3)[taken] -> pc=$b9
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $b9
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; jin(2,1)[taken] -> pc=$c0
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $c0
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; test(0xE,0x6)[taken] -> pc=$c7
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $c7
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; jl(5,3)[not taken] -> pc=$cb
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $cb
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; store(29,1)[land] -> pc=$ce
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $ce
+            lbnz    zv_fail6
+
+            call    zdisp_step              ; quit -> pc=$cf
+            lbdf    zv_fail6
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail6
+            ldn     rf
+            xri     $cf
+            lbnz    zv_fail6
+
+; ---- check 6: globals ----
+            ; global17 addr=$00e2 (or)
+            mov     rf, zdd_mem6
+            add16   rf, $00e2
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $07
+            lbnz    zv_fail6
+
+            ; global18 addr=$00e4 (and)
+            mov     rf, zdd_mem6
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $01
+            lbnz    zv_fail6
+
+            ; global19 addr=$00e6 (not)
+            mov     rf, zdd_mem6
+            add16   rf, $00e6
+            ldn     rf
+            xri     $ff
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $ff
+            lbnz    zv_fail6
+
+            ; global20 addr=$00e8 (load after inc/dec)
+            mov     rf, zdd_mem6
+            add16   rf, $00e8
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $09
+            lbnz    zv_fail6
+
+            ; global21 addr=$00ea (poison(skipped))
+            mov     rf, zdd_mem6
+            add16   rf, $00ea
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail6
+
+            ; global22 addr=$00ec (load after dec_chk)
+            mov     rf, zdd_mem6
+            add16   rf, $00ec
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $08
+            lbnz    zv_fail6
+
+            ; global23 addr=$00ee (inc_chk not-taken landed)
+            mov     rf, zdd_mem6
+            add16   rf, $00ee
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $01
+            lbnz    zv_fail6
+
+            ; global24 addr=$00f0 (load after inc_chk)
+            mov     rf, zdd_mem6
+            add16   rf, $00f0
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $09
+            lbnz    zv_fail6
+
+            ; global25 addr=$00f2 (poison(skipped))
+            mov     rf, zdd_mem6
+            add16   rf, $00f2
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail6
+
+            ; global26 addr=$00f4 (poison(skipped))
+            mov     rf, zdd_mem6
+            add16   rf, $00f4
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail6
+
+            ; global27 addr=$00f6 (poison(skipped))
+            mov     rf, zdd_mem6
+            add16   rf, $00f6
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail6
+
+            ; global28 addr=$00f8 (poison(skipped))
+            mov     rf, zdd_mem6
+            add16   rf, $00f8
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail6
+
+            ; global29 addr=$00fa (jl not-taken landed)
+            mov     rf, zdd_mem6
+            add16   rf, $00fa
+            ldn     rf
+            lbnz    zv_fail6
+            inc     rf
+            ldn     rf
+            xri     $01
+            lbnz    zv_fail6
+            mov     rb, zdd_results+6
+            ldi     0
+            lbr     zv_store6
+zv_fail6:   mov     rb, zdd_results+6
+            ldi     1
+zv_store6:  str     rb
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -1641,6 +2250,9 @@ zdd_frames4:    ds      36                  ; 1 frame * 36 bytes
 zdd_mem5:       ds      256
 zdd_stack5:     ds      16
 zdd_frames5:    ds      36                  ; 1 frame * 36 bytes
+zdd_mem6:       ds      256
+zdd_stack6:     ds      16
+zdd_frames6:    ds      36                  ; 1 frame * 36 bytes
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
 zdd_results:    ds      ZDDIAG_COUNT
@@ -1662,6 +2274,9 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem5
                 public  zdd_stack5
                 public  zdd_frames5
+                public  zdd_mem6
+                public  zdd_stack6
+                public  zdd_frames6
                 public  zdd_captured_text
                 public  zdd_capture_cursor
                 public  zdd_results
