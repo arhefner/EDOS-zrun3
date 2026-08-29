@@ -13,7 +13,7 @@ HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
 	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg lib/zdec.prg \
         lib/zinputl.prg lib/zdecode.prg lib/zvar.prg lib/zdispatch.prg \
-	lib/zdispemit.prg
+	lib/zdispemit.prg lib/fmt32.prg lib/ymodem.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
 	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
 	diag/zdictdiag.prg diag/zdictdiag_main.prg diag/zparsediag.prg \
@@ -83,7 +83,7 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	# backed implementation of the same name is deliberately left out
 	# of this link; an eventual ELF-DOS interpreter program links that
 	# one in instead, never both together (duplicate symbol).
-	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg
+	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg lib/ymodem.prg lib/fmt32.prg
 	rm -f diag/zdispatchdiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def

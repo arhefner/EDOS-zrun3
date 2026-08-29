@@ -94,6 +94,7 @@
             extrn   zdisp_emit_string
 
             extrn   zobj_get_parent
+            extrn   zobj_short_name
             extrn   zobj_get_sibling
             extrn   zobj_get_child
             extrn   zobj_test_attr
@@ -106,6 +107,7 @@
             extrn   zprop_get
             extrn   zprop_get_next
             extrn   zprop_put
+            extrn   ym_fmt_uint32
 
             extrn   zdisp_branch
             extrn   zdisp_return
@@ -113,6 +115,7 @@
             extrn   zdisp_print_inline
             extrn   zdisp_store_and_branch_nonzero
             extrn   zdisp_slt
+            extrn   zdisp_print_at
 
             extrn   zdisp_pc
             extrn   zdisp_quit
@@ -127,6 +130,8 @@
             extrn   zdisp_locals
             extrn   zdisp_text_buf
             extrn   zdisp_newline_buf
+            extrn   zdisp_char_buf
+            extrn   zdisp_num_buf
 
 ; zdisp_step: no arguments (uses zdisp_pc). Returns DF=1 for a decode
 ; error or an opcode this slice doesn't recognize yet.
@@ -400,8 +405,16 @@ zds_1op:
             lbz     zds_dec
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     7
+            lbz     zds_print_addr
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     9
             lbz     zds_remove_obj
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     10
+            lbz     zds_print_obj
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             xri     11
@@ -410,6 +423,10 @@ zds_1op:
             ldn     rf
             xri     12
             lbz     zds_jump
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     13
+            lbz     zds_print_paddr
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             xri     14
@@ -439,6 +456,14 @@ zds_0op:
             lbz     zds_print_ret
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     8
+            lbz     zds_ret_popped
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     9
+            lbz     zds_pop
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     10
             lbz     zds_quit
             mov     rf, zdisp_instr+ZDI_OPCODE
@@ -464,6 +489,22 @@ zds_var:
             ldn     rf
             xri     3
             lbz     zds_put_prop
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     5
+            lbz     zds_print_char
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     6
+            lbz     zds_print_num
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     8
+            lbz     zds_push
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     9
+            lbz     zds_pull
             stc
             rtn
 
@@ -1045,6 +1086,113 @@ zds_put_prop:
             call    zprop_put
             rtn
 
+; ---- print_char: emit operand[0]'s low byte as a single character ----
+zds_print_char:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (character)
+
+            mov     r8, zdisp_char_buf
+            glo     r9
+            str     r8
+            inc     r8
+            ldi     0
+            str     r8                  ; zdisp_char_buf = char, NUL
+
+            mov     rf, zdisp_char_buf
+            call    zdisp_emit_string
+            clc
+            rtn
+
+; ---- print_num: emit operand[0] as a signed decimal string, via
+; lib/ymodem.asm's own established ym_fmt_uint32 (32-bit unsigned,
+; RD:R8 = value, RF = destination buffer) -- a negative operand is
+; negated to its magnitude first, with '-' written directly into
+; zdisp_num_buf ahead of where ym_fmt_uint32's own digits land, so
+; the whole thing goes to zdisp_emit_string in one call ----
+zds_print_num:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (signed)
+
+            mov     rb, zdisp_num_buf   ; rb = ym_fmt_uint32's own
+                                        ; destination cursor
+            ghi     r9
+            ani     $80
+            lbz     zpn_positive
+
+            ldi     '-'
+            str     rb
+            inc     rb
+
+            ghi     r9
+            not
+            phi     r9
+            glo     r9
+            not
+            plo     r9
+            add16   r9, 1               ; r9 = magnitude (negate)
+
+zpn_positive:
+            mov     r8, r9              ; r8 = value's low word
+            ldi     0
+            plo     rd
+            phi     rd                  ; rd = 0 (value's high word --
+                                        ; our magnitude never exceeds
+                                        ; 32768, always fits in r8 alone)
+            mov     rf, rb              ; rf = destination for
+                                        ; ym_fmt_uint32's own digits
+            call    ym_fmt_uint32
+
+            mov     rf, zdisp_num_buf
+            call    zdisp_emit_string
+            clc
+            rtn
+
+; ---- push: operand[0] pushed onto the eval stack (variable 0's own
+; "pushes" semantics via zvar_write); no store, no branch ----
+zds_push:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0]
+
+            mov     rf, r9
+            ldi     0
+            call    zvar_write
+            rtn
+
+; ---- pull: operand[0] is a variable NUMBER (re-read fresh from
+; zdisp_operand+1 after the pop below, same reasoning as dec_chk/
+; inc_chk/inc/dec above), written indirectly with the popped value ----
+zds_pull:
+            ldi     0
+            call    zvar_read           ; rf = popped value, df=err
+            lbdf    zds_error
+
+            mov     r8, zdisp_value
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_value = popped value
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = popped value, reloaded
+                                        ; fresh
+            mov     r8, zdisp_operand+1
+            ldn     r8                  ; d = variable number
+            call    zvar_write_indirect
+            rtn
+
 ; ---- print: decode and emit this instruction's own inline text ----
 zds_print:
             call    zdisp_print_inline
@@ -1477,6 +1625,87 @@ zds_not:
             mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
             ldn     r8
             call    zvar_write
+            rtn
+
+; ---- print_addr: operand[0] is a guest/story address of packed
+; z-text (not this instruction's own inline text) -- translate to
+; real and decode+emit via zdisp_print_at ----
+zds_print_addr:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (guest addr)
+
+            mov     r8, zmbase
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = zmbase
+            add16   r9, ra              ; r9 = real address
+
+            mov     rd, r9
+            call    zdisp_print_at
+            rtn
+
+; ---- print_paddr: operand[0] is a V3 packed address (guest address
+; = operand[0]*2) of packed z-text ----
+zds_print_paddr:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (packed addr)
+            shl16   r9                  ; r9 = operand[0]*2 (guest addr)
+
+            mov     r8, zmbase
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = zmbase
+            add16   r9, ra              ; r9 = real address
+
+            mov     rd, r9
+            call    zdisp_print_at
+            rtn
+
+; ---- print_obj: operand[0] is an object number -- decode+emit its
+; own short name, using zobj_short_name's own exact length rather
+; than zdisp_print_at's generous fixed one (available for free here,
+; unlike print_addr/print_paddr, which have no prior measurement) ----
+zds_print_obj:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (object)
+
+            mov     rd, r9
+            call    zobj_short_name     ; rf = real text addr, rc =
+                                        ; length (bytes)
+            mov     rd, rf
+            mov     rf, zdisp_text_buf
+            call    zdec_decode
+            lbdf    zds_error
+
+            mov     rf, zdisp_text_buf
+            call    zdisp_emit_string
+            rtn
+
+; ---- ret_popped / pop: pop the eval stack (variable 0's own "pops"
+; semantics via zvar_read) -- ret_popped returns the popped value,
+; pop just discards it ----
+zds_ret_popped:
+            ldi     0
+            call    zvar_read           ; rf = popped value, df=err
+            lbdf    zds_error
+            call    zdisp_return
+            rtn
+
+zds_pop:
+            ldi     0
+            call    zvar_read           ; rf = popped value (discarded),
+                                        ; df=err
             rtn
 
 zds_error:
@@ -1975,6 +2204,33 @@ zdpi_fail:
             rtn
             endp
 
+; zdisp_print_at (internal): RD = real host address of packed z-text
+; (set immediately before the call). Decodes and emits it, using a
+; generous fixed length (matching zdisp_text_buf's own capacity)
+; rather than a caller-supplied one -- unlike inline text (measured by
+; decode_instruction's own has_text scan) or an object's short name
+; (measured by zobj_short_name), print_addr/print_paddr point at
+; arbitrary story-file text with no prior length measurement anywhere
+; in this pipeline. Safe because zdec_decode itself stops at the real
+; end-of-string word regardless of how much of the given length goes
+; unused (see zdec.asm's own zdec_word_done), matching the "trust the
+; input" boundary zdisp_text_buf's own declaration already documents.
+            proc    zdisp_print_at
+            mov     rc, 512
+            mov     rf, zdisp_text_buf
+            call    zdec_decode
+            lbdf    zdpa_fail
+
+            mov     rf, zdisp_text_buf
+            call    zdisp_emit_string
+            clc
+            rtn
+
+zdpa_fail:
+            stc
+            rtn
+            endp
+
             proc    _zdispatch_data
 zdisp_pc:            dw      0
 zdisp_quit:           db      0
@@ -2004,6 +2260,12 @@ zdisp_newline_buf:             db      10, 0   ; a constant 2-byte
                                               ; NUL-terminated "\n",
                                               ; reused by both
                                               ; print_ret and new_line
+zdisp_char_buf:                ds      2       ; print_char's own
+                                              ; 1-char + NUL buffer
+zdisp_num_buf:                 ds      12      ; print_num's own
+                                              ; '-' + up to 10 digits
+                                              ; (ym_fmt_uint32's own
+                                              ; documented minimum) + NUL
 
                 public  zdisp_pc
                 public  zdisp_quit
@@ -2018,4 +2280,6 @@ zdisp_newline_buf:             db      10, 0   ; a constant 2-byte
                 public  zdisp_locals
                 public  zdisp_text_buf
                 public  zdisp_newline_buf
+                public  zdisp_char_buf
+                public  zdisp_num_buf
             endp

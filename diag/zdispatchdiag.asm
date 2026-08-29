@@ -79,11 +79,14 @@
             extrn   zdd_mem7
             extrn   zdd_stack7
             extrn   zdd_frames7
+            extrn   zdd_mem8
+            extrn   zdd_stack8
+            extrn   zdd_frames8
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     8
+ZDDIAG_COUNT:   equ     9
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -2643,6 +2646,596 @@ zc7_zero_loop:
 zv_fail7:   mov     rb, zdd_results+7
             ldi     1
 zv_store7:  str     rb
+
+; ---- check 8: print family (print_char, print_num, print_addr,
+; print_paddr, print_obj) and stack opcodes (push, pull, pop,
+; ret_popped, via a call) -- exercises zdisp_print_at's own generous-
+; length self-terminating decode (print_addr/print_paddr), zobj_
+; short_name's exact-length decode (print_obj), ym_fmt_uint32's
+; signed-negation wrapper (print_num), and the eval-stack push/pop/
+; pull-indirect-write mechanics through a real call/return. Reuses a
+; minimal 1-object table (object1, short name "hello") plus a
+; floating z-text blob (also "hello") for print_addr/print_paddr. ----
+; ---- check 8: setup ----
+            mov     rd, zdd_mem8
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack8
+            mov     rf, zdd_stack8+16
+            call    zstack_init
+            mov     rd, $00e0
+            mov     rf, zdd_frames8
+            mov     rc, zdd_frames8+72      ; room for 2 frames (the
+                                            ; routine call below nests
+                                            ; one)
+            call    zvar_init
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9
+            mov     rd, r9
+            call    zobj_init
+
+            mov     rf, zdd_mem8
+            mov     r8, 256
+zc8_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            sub16   r8, 1
+            glo     r8
+            lbnz    zc8_zero_loop
+            ghi     r8
+            lbnz    zc8_zero_loop
+
+            mov     r8, zdd_captured_text
+            mov     rf, zdd_capture_cursor
+            ghi     r8
+            str     rf
+            inc     rf
+            glo     r8
+            str     rf                      ; zdd_capture_cursor =
+                                            ; zdd_captured_text (reset)
+
+; ---- check 8: object table (object1 short name = "hello", proptable @ guest $50, no properties) ----
+            mov     r9, zdd_mem8
+            add16   r9, $50         ; r9 = real addr of obj1's proptable
+            mov     rf, zdd_mem8
+            add16   rf, $44         ; obj1 entry offset68: child=0(unused), proptable (real) at +1,+2
+            ldi     $00
+            str     rf
+            inc     rf
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem8
+            add16   rf, $50         ; obj1 proptable: short name "hello" (2 words), no properties
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $35
+            str     rf
+            inc     rf
+            ldi     $51
+            str     rf
+            inc     rf
+            ldi     $c6
+            str     rf
+            inc     rf
+            ldi     $85
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+            mov     rf, zdd_mem8
+            add16   rf, $70         ; floating z-text blob "hello", for
+                                    ; print_addr($70)/print_paddr($38)
+            ldi     $35
+            str     rf
+            inc     rf
+            ldi     $51
+            str     rf
+            inc     rf
+            ldi     $c6
+            str     rf
+            inc     rf
+            ldi     $85
+            str     rf
+
+            mov     rf, zdd_mem8
+            add16   rf, $10         ; routine (0 locals): push(77), ret_popped
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $e8
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $4d
+            str     rf
+            inc     rf
+            ldi     $b8
+            str     rf
+
+; ---- check 8: program bytes ----
+            mov     rf, zdd_mem8
+            add16   rf, $90
+            ldi     $e5
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $41
+            str     rf
+            inc     rf
+            ldi     $e5
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $42
+            str     rf
+            inc     rf
+            ldi     $e6
+            str     rf
+            inc     rf
+            ldi     $3f
+            str     rf
+            inc     rf
+            ldi     $04
+            str     rf
+            inc     rf
+            ldi     $d2
+            str     rf
+            inc     rf
+            ldi     $e6
+            str     rf
+            inc     rf
+            ldi     $3f
+            str     rf
+            inc     rf
+            ldi     $ff
+            str     rf
+            inc     rf
+            ldi     $d6
+            str     rf
+            inc     rf
+            ldi     $e6
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $97
+            str     rf
+            inc     rf
+            ldi     $70
+            str     rf
+            inc     rf
+            ldi     $9d
+            str     rf
+            inc     rf
+            ldi     $38
+            str     rf
+            inc     rf
+            ldi     $9a
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $e8
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $e9
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $e8
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $e8
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $b9
+            str     rf
+            inc     rf
+            ldi     $e9
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $e0
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $08
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $0090
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $90
+            str     rf
+
+; ---- check 8: steps ----
+            call    zdisp_step              ; print_char(65) -> pc=$93
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $93
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_char(66) -> pc=$96
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $96
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_num(1234) -> pc=$9a
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $9a
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_num(-42) -> pc=$9e
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $9e
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_num(0) -> pc=$a1
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $a1
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_addr($70) -> pc=$a3
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $a3
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_paddr($38) -> pc=$a5
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $a5
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; print_obj(1) -> pc=$a7
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $a7
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; push(99) -> pc=$aa
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $aa
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; pull(g16) -> pc=$ad
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $ad
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; push(5) -> pc=$b0
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $b0
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; push(10) -> pc=$b3
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $b3
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; pop -> pc=$b4
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $b4
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; pull(g17) -> pc=$b7
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $b7
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; call routine($08)->g18 -> pc=$11
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $11
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; push(77) [in routine] -> pc=$14
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $14
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; ret_popped [in routine] -> pc=$bb (return addr)
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $bb
+            lbnz    zv_fail8
+
+            call    zdisp_step              ; quit -> pc=$bc
+            lbdf    zv_fail8
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail8
+            ldn     rf
+            xri     $bc
+            lbnz    zv_fail8
+
+; ---- check 8: globals ----
+            ; global16 addr=$00e0 (pull after push(99))
+            mov     rf, zdd_mem8
+            add16   rf, $00e0
+            ldn     rf
+            lbnz    zv_fail8
+            inc     rf
+            ldn     rf
+            xri     $63
+            lbnz    zv_fail8
+
+            ; global17 addr=$00e2 (pull after push/push/pop)
+            mov     rf, zdd_mem8
+            add16   rf, $00e2
+            ldn     rf
+            lbnz    zv_fail8
+            inc     rf
+            ldn     rf
+            xri     $05
+            lbnz    zv_fail8
+
+            ; global18 addr=$00e4 (call routine ret_popped(push 77))
+            mov     rf, zdd_mem8
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail8
+            inc     rf
+            ldn     rf
+            xri     $4d
+            lbnz    zv_fail8
+
+; ---- check 8: captured text (expect 'AB1234-420hellohellohello') ----
+            mov     rf, zdd_captured_text
+            ldn     rf
+            xri     'A'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+1
+            ldn     rf
+            xri     'B'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+2
+            ldn     rf
+            xri     '1'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+3
+            ldn     rf
+            xri     '2'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+4
+            ldn     rf
+            xri     '3'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+5
+            ldn     rf
+            xri     '4'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+6
+            ldn     rf
+            xri     '-'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+7
+            ldn     rf
+            xri     '4'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+8
+            ldn     rf
+            xri     '2'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+9
+            ldn     rf
+            xri     '0'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+10
+            ldn     rf
+            xri     'h'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+11
+            ldn     rf
+            xri     'e'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+12
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+13
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+14
+            ldn     rf
+            xri     'o'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+15
+            ldn     rf
+            xri     'h'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+16
+            ldn     rf
+            xri     'e'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+17
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+18
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+19
+            ldn     rf
+            xri     'o'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+20
+            ldn     rf
+            xri     'h'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+21
+            ldn     rf
+            xri     'e'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+22
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+23
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+24
+            ldn     rf
+            xri     'o'
+            lbnz    zv_fail8
+
+            mov     rf, zdd_captured_text+25
+            ldn     rf
+            lbnz    zv_fail8                ; NUL terminator
+            mov     rb, zdd_results+8
+            ldi     0
+            lbr     zv_store8
+zv_fail8:   mov     rb, zdd_results+8
+            ldi     1
+zv_store8:  str     rb
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -2730,6 +3323,9 @@ zdd_frames6:    ds      36                  ; 1 frame * 36 bytes
 zdd_mem7:       ds      256
 zdd_stack7:     ds      16
 zdd_frames7:    ds      36                  ; 1 frame * 36 bytes
+zdd_mem8:       ds      256
+zdd_stack8:     ds      16
+zdd_frames8:    ds      72                  ; 2 frames * 36 bytes
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
 zdd_results:    ds      ZDDIAG_COUNT
@@ -2757,6 +3353,9 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem7
                 public  zdd_stack7
                 public  zdd_frames7
+                public  zdd_mem8
+                public  zdd_stack8
+                public  zdd_frames8
                 public  zdd_captured_text
                 public  zdd_capture_cursor
                 public  zdd_results
