@@ -90,10 +90,24 @@
             extrn   zvar_frame_pop
             extrn   zdisp_emit_string
 
+            extrn   zobj_get_parent
+            extrn   zobj_get_sibling
+            extrn   zobj_get_child
+            extrn   zobj_test_attr
+            extrn   zobj_set_attr
+            extrn   zobj_clear_attr
+            extrn   zobj_remove
+            extrn   zobj_insert
+            extrn   zprop_get_addr
+            extrn   zprop_get_len
+            extrn   zprop_get
+            extrn   zprop_get_next
+
             extrn   zdisp_branch
             extrn   zdisp_return
             extrn   zdisp_do_call
             extrn   zdisp_print_inline
+            extrn   zdisp_store_and_branch_nonzero
 
             extrn   zdisp_pc
             extrn   zdisp_quit
@@ -269,8 +283,36 @@ zds_2op:
             lbz     zds_je
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     10
+            lbz     zds_test_attr
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     11
+            lbz     zds_set_attr
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     12
+            lbz     zds_clear_attr
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     13
             lbz     zds_store
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     14
+            lbz     zds_insert_obj
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     17
+            lbz     zds_get_prop
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     18
+            lbz     zds_get_prop_addr
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     19
+            lbz     zds_get_next_prop
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             xri     20
@@ -286,6 +328,26 @@ zds_1op:
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             lbz     zds_jz              ; opcode 0
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     1
+            lbz     zds_get_sibling
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     2
+            lbz     zds_get_child
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     3
+            lbz     zds_get_parent
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     4
+            lbz     zds_get_prop_len
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     9
+            lbz     zds_remove_obj
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
             xri     11
@@ -572,7 +634,333 @@ zds_new_line:
             clc
             rtn
 
+; ---- test_attr: RD=object, D=attribute -> DF=is_set, branch ----
+zds_test_attr:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = object
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = attribute
+
+            mov     rd, r9
+            glo     ra
+            call    zobj_test_attr      ; df = is_set
+            lbdf    zdta_set
+            ldi     0
+            lbr     zdta_branch
+zdta_set:
+            ldi     1
+zdta_branch:
+            call    zdisp_branch
+            rtn
+
+; ---- set_attr / clear_attr: RD=object, D=attribute, no return ----
+zds_set_attr:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            mov     rd, r9
+            glo     ra
+            call    zobj_set_attr
+            rtn
+
+zds_clear_attr:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            mov     rd, r9
+            glo     ra
+            call    zobj_clear_attr
+            rtn
+
+; ---- insert_obj: RD=object, D=destination, no return ----
+zds_insert_obj:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            mov     rd, r9
+            glo     ra
+            call    zobj_insert
+            rtn
+
+; ---- get_prop: RD=object, D=property -> RF=value, store ----
+zds_get_prop:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            mov     rd, r9
+            glo     ra
+            call    zprop_get           ; rf = value
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- get_prop_addr: RD=object, D=property -> RF=real address (0 if
+; absent), translated to a guest/story address before storing --
+; zprop_get_addr, like every zobj_*/zprop_* routine, operates on real
+; memory directly (see zobj.asm's own zobase), but the Z-machine
+; variable this gets stored into is read back as a guest address by
+; whatever opcode uses it next (get_prop_len, loadb/storeb, ...) ----
+zds_get_prop_addr:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            mov     rd, r9
+            glo     ra
+            call    zprop_get_addr      ; rf = real address (0 if
+                                        ; absent)
+            glo     rf
+            lbnz    zdgpa_translate
+            ghi     rf
+            lbnz    zdgpa_translate
+            lbr     zdgpa_store         ; absent: store 0 as-is, no
+                                        ; translation (0 - zmbase
+                                        ; would be the wrong thing)
+
+zdgpa_translate:
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = zmbase
+            sub16   rf, r9              ; rf = real - zmbase = guest
+                                        ; address
+
+zdgpa_store:
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- get_next_prop: RD=object, D=property -> D=next property number,
+; store; DF=1 if `property` wasn't actually one of the object's own ----
+zds_get_next_prop:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra
+
+            mov     rd, r9
+            glo     ra
+            call    zprop_get_next      ; d = next property, df=err
+            lbdf    zds_error
+
+            plo     ra
+            ldi     0
+            phi     ra                  ; ra = 0:next_property
+
+            mov     rf, ra
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- get_sibling / get_child: RD=object -> D=sibling/child, store,
+; branch if nonzero ----
+zds_get_sibling:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rd, r9
+            call    zobj_get_sibling    ; d = sibling
+            call    zdisp_store_and_branch_nonzero
+            rtn
+
+zds_get_child:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rd, r9
+            call    zobj_get_child      ; d = child
+            call    zdisp_store_and_branch_nonzero
+            rtn
+
+; ---- get_parent: RD=object -> D=parent, store (no branch) ----
+zds_get_parent:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rd, r9
+            call    zobj_get_parent     ; d = parent
+            plo     ra
+            ldi     0
+            phi     ra                  ; ra = 0:parent
+
+            mov     rf, ra
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- get_prop_len: operand[0] is a property's own data address (a
+; guest/story address, as every property address a game holds is --
+; see get_prop_addr's own note), translated to real memory before the
+; call, since zprop_get_len (like every zobj_*/zprop_* routine)
+; expects one ----
+zds_get_prop_len:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (guest
+                                        ; address, or 0)
+
+            glo     r9
+            lbnz    zdgpl_translate
+            ghi     r9
+            lbnz    zdgpl_translate
+            lbr     zdgpl_have_addr     ; address 0: leave as-is (its
+                                        ; own "no property" case,
+                                        ; matching zprop_get_len's own
+                                        ; special-cased 0 -- adding
+                                        ; zmbase to it would be wrong)
+
+zdgpl_translate:
+            mov     r8, zmbase
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = zmbase
+            add16   r9, ra              ; r9 = real address
+
+zdgpl_have_addr:
+            mov     rd, r9
+            call    zprop_get_len       ; d = length
+            plo     rc
+            ldi     0
+            phi     rc                  ; rc = 0:length
+            mov     rf, rc
+
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- remove_obj: RD=object, no return ----
+zds_remove_obj:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rd, r9
+            call    zobj_remove
+            rtn
+
 zds_error:
+            stc
+            rtn
+            endp
+
+; zdisp_store_and_branch_nonzero (internal): D = an object number (0-
+; 255, zero-extended into the store below; set immediately before the
+; call -- nothing else may run between the zobj_get_sibling/
+; zobj_get_child call that produced it and this one, since nothing
+; else is guaranteed to leave d alone). Stores it into the current
+; instruction's own store_variable, then branches if it's nonzero.
+; Shared by get_sibling/get_child, whose Z-machine semantics are
+; identical from this point on. DF=1 propagates a zvar_write failure.
+            proc    zdisp_store_and_branch_nonzero
+            plo     ra                  ; ra.0 = the value
+            mov     r8, zdisp_value
+            ldi     0
+            str     r8
+            inc     r8
+            glo     ra
+            str     r8                  ; zdisp_value = 0:value --
+                                        ; stashed in memory, since
+                                        ; zvar_write's own clobber
+                                        ; footprint is wide enough to
+                                        ; reach any register
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = zdisp_value, reloaded
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            lbdf    zdsb_fail
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = zdisp_value, reloaded
+                                        ; again fresh (zvar_write may
+                                        ; have clobbered anything)
+            glo     r9
+            lbnz    zdsb_nonzero
+            ghi     r9
+            lbnz    zdsb_nonzero
+            ldi     0
+            lbr     zdsb_branch
+zdsb_nonzero:
+            ldi     1
+zdsb_branch:
+            call    zdisp_branch
+            rtn
+
+zdsb_fail:
             stc
             rtn
             endp
@@ -994,6 +1382,7 @@ zdisp_newline_buf:             db      10, 0   ; a constant 2-byte
                                               ; NUL-terminated "\n",
                                               ; reused by both
                                               ; print_ret and new_line
+
                 public  zdisp_pc
                 public  zdisp_quit
                 public  zdisp_i

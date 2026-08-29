@@ -28,6 +28,15 @@
 ; constant-newline path, plus print_ret's own return-true/store-
 ; variable mechanics.
 ;
+; check 4 is new: attributes and object-tree queries (test_attr,
+; set_attr, clear_attr, get_sibling, get_child, get_parent) -- reuses
+; the exact object tree from zobjdiag/tests/test_host.c's obj_image
+; (object table at guest 0).
+;
+; check 5 is new: properties (get_prop, get_prop_addr, get_prop_len,
+; get_next_prop) plus insert_obj/remove_obj, sharing check 4's object
+; tree and property tables.
+;
 ; Touches no ELF-DOS kernel or BIOS entry points (this file's own
 ; zdisp_emit_string test double included -- see check 3's own header
 ; comment for why the real K_MSG-backed one isn't used here).
@@ -39,6 +48,8 @@
             extrn   zminit
             extrn   zstack_init
             extrn   zvar_init
+            extrn   zobj_init
+            extrn   zmbase
             extrn   zdisp_step
 
             extrn   zdisp_pc
@@ -56,11 +67,17 @@
             extrn   zdd_mem3
             extrn   zdd_stack3
             extrn   zdd_frames3
+            extrn   zdd_mem4
+            extrn   zdd_stack4
+            extrn   zdd_frames4
+            extrn   zdd_mem5
+            extrn   zdd_stack5
+            extrn   zdd_frames5
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     4
+ZDDIAG_COUNT:   equ     6
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -667,6 +684,882 @@ zv_fail3:   mov     rb, zdd_results+3
             ldi     1
 zv_store3:  str     rb
 
+
+; ---- check 4: attributes and object-tree queries (test_attr,
+; set_attr, clear_attr, get_sibling, get_child, get_parent) --
+; exercises zobj_test_attr's DF-to-branch propagation, zobj_set_attr/
+; clear_attr, and zdisp_store_and_branch_nonzero's store+branch
+; sequencing for get_child/get_sibling, plus get_parent's store-only
+; path. Reuses the exact object tree from zobjdiag/tests/test_host.c's
+; obj_image (object table at guest 0): obj1 child=2, obj2 parent=1
+; sibling=3, obj3 parent=1. ----
+; ---- check 4: setup ----
+            mov     rd, zdd_mem4
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack4
+            mov     rf, zdd_stack4+16
+            call    zstack_init
+            mov     rd, $00e0               ; globals_base -- clear of
+                                            ; the object table (0-118)
+                                            ; and the program bytes
+            mov     rf, zdd_frames4
+            mov     rc, zdd_frames4+36
+            call    zvar_init
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                      ; r9 = zmbase == the real
+                                            ; address of guest 0, which
+                                            ; is where this check's own
+                                            ; object table starts
+            mov     rd, r9
+            call    zobj_init
+
+            mov     rf, zdd_mem4
+            ldi     119
+            plo     r8                      ; r8.0 = zero-fill count
+zc4_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            dec     r8
+            glo     r8
+            lbnz    zc4_zero_loop
+
+; ---- check 4: object table (host-verified layout, reused
+; from tests/test_host.c's own obj_image) ----
+            mov     rf, zdd_mem4
+            add16   rf, $0c         ; prop default[6] = 0x2222
+            ldi     $22
+            str     rf
+            inc     rf
+            ldi     $22
+            str     rf
+
+; obj1/obj2/obj3's own proptable_addr entry fields hold REAL/host
+; addresses, not guest-relative offsets -- zobj_prop_table_addr
+; returns the entry's stored field value as-is, with no translation
+; (matching diag/zpropdiag.asm's own test table, which stores
+; `dw zp_table+100` rather than a raw offset), so each is computed at
+; runtime from zdd_mem4 here rather than written as a literal offset.
+            mov     r9, zdd_mem4
+            add16   r9, $64         ; r9 = real addr of obj1's proptable
+                                    ; (guest offset 100)
+            mov     rf, zdd_mem4
+            add16   rf, $44         ; obj1: child=2, proptable (real)
+            ldi     $02
+            str     rf
+            inc     rf
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem4
+            add16   rf, $4b         ; obj2: parent=1, sibling=3
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+
+            mov     r9, zdd_mem4
+            add16   r9, $6e         ; r9 = real addr of obj2's proptable
+                                    ; (guest offset 110)
+            mov     rf, zdd_mem4
+            add16   rf, $4e         ; obj2: proptable (real)
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem4
+            add16   rf, $54         ; obj3: parent=1
+            ldi     $01
+            str     rf
+
+            mov     r9, zdd_mem4
+            add16   r9, $73         ; r9 = real addr of obj3's proptable
+                                    ; (guest offset 115)
+            mov     rf, zdd_mem4
+            add16   rf, $57         ; obj3: proptable (real)
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem4
+            add16   rf, $64         ; obj1 proptable: 1-word name, prop5(len1)=0x99, prop3(len2)=0x1234, end
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $99
+            str     rf
+            inc     rf
+            ldi     $23
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $34
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+            mov     rf, zdd_mem4
+            add16   rf, $6e         ; obj2 proptable: no name, end
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+            mov     rf, zdd_mem4
+            add16   rf, $73         ; obj3 proptable: no name, prop5(len1)=0x42, end
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $42
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+; ---- check 4: program bytes ----
+            mov     rf, zdd_mem4
+            add16   rf, $80
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0b
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $0c
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $0a
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $92
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $91
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $14
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $93
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $15
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $0080 -- without
+            ldi     0                       ; this, check4 starts from
+            str     rf                      ; whatever pc check3 left
+            inc     rf                      ; behind (against zdd_mem4,
+            ldi     $80                     ; an entirely different
+            str     rf                      ; buffer), not its own
+                                            ; program's base address
+
+; ---- check 4: steps ----
+            call    zdisp_step              ; test_attr(1,3)#1 -> pc=$84
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $84
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; set_attr(1,3) -> pc=$87
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $87
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; test_attr(1,3)#2 -> pc=$8e
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $8e
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; clear_attr(1,3) -> pc=$91
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $91
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; test_attr(1,3)#3 -> pc=$95
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $95
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; get_child(1) -> pc=$9c
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $9c
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; get_sibling(2) -> pc=$a3
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $a3
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; get_parent(2) -> pc=$a6
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $a6
+            lbnz    zv_fail4
+
+            call    zdisp_step              ; quit -> pc=$a7
+            lbdf    zv_fail4
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail4
+            ldn     rf
+            xri     $a7
+            lbnz    zv_fail4
+
+; ---- check 4: globals ----
+            ; global16 addr=$00e0
+            mov     rf, zdd_mem4
+            add16   rf, $00e0
+            ldn     rf
+            lbnz    zv_fail4
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail4
+
+            ; global17 addr=$00e2
+            mov     rf, zdd_mem4
+            add16   rf, $00e2
+            ldn     rf
+            lbnz    zv_fail4
+            inc     rf
+            ldn     rf
+            xri     $02
+            lbnz    zv_fail4
+
+            ; global18 addr=$00e4
+            mov     rf, zdd_mem4
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail4
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail4
+
+            ; global19 addr=$00e6
+            mov     rf, zdd_mem4
+            add16   rf, $00e6
+            ldn     rf
+            lbnz    zv_fail4
+            inc     rf
+            ldn     rf
+            xri     $03
+            lbnz    zv_fail4
+
+            ; global20 addr=$00e8
+            mov     rf, zdd_mem4
+            add16   rf, $00e8
+            ldn     rf
+            lbnz    zv_fail4
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail4
+
+            ; global21 addr=$00ea
+            mov     rf, zdd_mem4
+            add16   rf, $00ea
+            ldn     rf
+            lbnz    zv_fail4
+            inc     rf
+            ldn     rf
+            xri     $01
+            lbnz    zv_fail4
+
+            mov     rb, zdd_results+4
+            ldi     0
+            lbr     zv_store4
+zv_fail4:   mov     rb, zdd_results+4
+            ldi     1
+zv_store4:  str     rb
+
+; ---- check 5: properties (get_prop, get_prop_addr, get_prop_len,
+; get_next_prop) plus insert_obj/remove_obj -- exercises zprop_get's
+; always-DF=0 path, zprop_get_addr's real->guest RF translation via
+; zmbase, zprop_get_len's guest->real operand translation, and
+; zprop_get_next's DF-as-instruction-error propagation, together with
+; zobj_insert/zobj_remove's tree-mutation effects on a subsequent
+; get_child/get_parent. Reuses the same object tree and property
+; tables as check 4 (object1 has prop5(len1)=0x99 then prop3(len2)=
+; 0x1234, descending order). ----
+; ---- check 5: setup ----
+            mov     rd, zdd_mem5
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack5
+            mov     rf, zdd_stack5+16
+            call    zstack_init
+            mov     rd, $00e0               ; globals_base -- clear of
+                                            ; the object table (0-118)
+                                            ; and the program bytes
+            mov     rf, zdd_frames5
+            mov     rc, zdd_frames5+36
+            call    zvar_init
+
+            mov     r8, zmbase
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                      ; r9 = zmbase == the real
+                                            ; address of guest 0, which
+                                            ; is where this check's own
+                                            ; object table starts
+            mov     rd, r9
+            call    zobj_init
+
+            mov     rf, zdd_mem5
+            ldi     119
+            plo     r8                      ; r8.0 = zero-fill count
+zc5_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            dec     r8
+            glo     r8
+            lbnz    zc5_zero_loop
+
+; ---- check 5: object table (host-verified layout, reused
+; from tests/test_host.c's own obj_image) ----
+            mov     rf, zdd_mem5
+            add16   rf, $0c         ; prop default[6] = 0x2222
+            ldi     $22
+            str     rf
+            inc     rf
+            ldi     $22
+            str     rf
+
+; see check 4's own note: proptable_addr fields hold REAL/host
+; addresses (zobj_prop_table_addr returns the stored field value
+; as-is, no translation), computed at runtime from zdd_mem5 here.
+            mov     r9, zdd_mem5
+            add16   r9, $64         ; r9 = real addr of obj1's proptable
+                                    ; (guest offset 100)
+            mov     rf, zdd_mem5
+            add16   rf, $44         ; obj1: child=2, proptable (real)
+            ldi     $02
+            str     rf
+            inc     rf
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem5
+            add16   rf, $4b         ; obj2: parent=1, sibling=3
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+
+            mov     r9, zdd_mem5
+            add16   r9, $6e         ; r9 = real addr of obj2's proptable
+                                    ; (guest offset 110)
+            mov     rf, zdd_mem5
+            add16   rf, $4e         ; obj2: proptable (real)
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem5
+            add16   rf, $54         ; obj3: parent=1
+            ldi     $01
+            str     rf
+
+            mov     r9, zdd_mem5
+            add16   r9, $73         ; r9 = real addr of obj3's proptable
+                                    ; (guest offset 115)
+            mov     rf, zdd_mem5
+            add16   rf, $57         ; obj3: proptable (real)
+            ghi     r9
+            str     rf
+            inc     rf
+            glo     r9
+            str     rf
+
+            mov     rf, zdd_mem5
+            add16   rf, $64         ; obj1 proptable: 1-word name, prop5(len1)=0x99, prop3(len2)=0x1234, end
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $99
+            str     rf
+            inc     rf
+            ldi     $23
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $34
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+            mov     rf, zdd_mem5
+            add16   rf, $6e         ; obj2 proptable: no name, end
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+            mov     rf, zdd_mem5
+            add16   rf, $73         ; obj3 proptable: no name, prop5(len1)=0x42, end
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $42
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+
+; ---- check 5: program bytes ----
+            mov     rf, zdd_mem5
+            add16   rf, $b0
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $a4
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $14
+            str     rf
+            inc     rf
+            ldi     $0e
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $92
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $15
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $16
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $99
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $93
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $17
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $00b0 (see check4's
+            ldi     0                       ; own note on why this
+            str     rf                      ; write is required)
+            inc     rf
+            ldi     $b0
+            str     rf
+
+; ---- check 5: steps ----
+            call    zdisp_step              ; get_prop(1,5) -> pc=$b4
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $b4
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; get_prop_addr(1,5) -> pc=$b8
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $b8
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; get_prop_len(var17) -> pc=$bb
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $bb
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; get_next_prop(1,0) -> pc=$bf
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $bf
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; get_next_prop(1,5) -> pc=$c3
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $c3
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; insert_obj(3,2) -> pc=$c6
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $c6
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; get_child(2) -> pc=$cd
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $cd
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; remove_obj(3) -> pc=$cf
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $cf
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; get_parent(3) -> pc=$d2
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $d2
+            lbnz    zv_fail5
+
+            call    zdisp_step              ; quit -> pc=$d3
+            lbdf    zv_fail5
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail5
+            ldn     rf
+            xri     $d3
+            lbnz    zv_fail5
+
+; ---- check 5: globals ----
+            ; global16 addr=$00e0
+            mov     rf, zdd_mem5
+            add16   rf, $00e0
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            xri     $99
+            lbnz    zv_fail5
+
+            ; global17 addr=$00e2
+            mov     rf, zdd_mem5
+            add16   rf, $00e2
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            xri     $68
+            lbnz    zv_fail5
+
+            ; global18 addr=$00e4
+            mov     rf, zdd_mem5
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            xri     $01
+            lbnz    zv_fail5
+
+            ; global19 addr=$00e6
+            mov     rf, zdd_mem5
+            add16   rf, $00e6
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            xri     $05
+            lbnz    zv_fail5
+
+            ; global20 addr=$00e8
+            mov     rf, zdd_mem5
+            add16   rf, $00e8
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            xri     $03
+            lbnz    zv_fail5
+
+            ; global21 addr=$00ea
+            mov     rf, zdd_mem5
+            add16   rf, $00ea
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            xri     $03
+            lbnz    zv_fail5
+
+            ; global23 addr=$00ee
+            mov     rf, zdd_mem5
+            add16   rf, $00ee
+            ldn     rf
+            lbnz    zv_fail5
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail5
+
+            mov     rb, zdd_results+5
+            ldi     0
+            lbr     zv_store5
+zv_fail5:   mov     rb, zdd_results+5
+            ldi     1
+zv_store5:  str     rb
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -742,6 +1635,12 @@ zdd_frames2:    ds      36                  ; 1 frame * 36 bytes
 zdd_mem3:       ds      64
 zdd_stack3:     ds      16
 zdd_frames3:    ds      36                  ; 1 frame * 36 bytes
+zdd_mem4:       ds      256
+zdd_stack4:     ds      16
+zdd_frames4:    ds      36                  ; 1 frame * 36 bytes
+zdd_mem5:       ds      256
+zdd_stack5:     ds      16
+zdd_frames5:    ds      36                  ; 1 frame * 36 bytes
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
 zdd_results:    ds      ZDDIAG_COUNT
@@ -757,6 +1656,12 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem3
                 public  zdd_stack3
                 public  zdd_frames3
+                public  zdd_mem4
+                public  zdd_stack4
+                public  zdd_frames4
+                public  zdd_mem5
+                public  zdd_stack5
+                public  zdd_frames5
                 public  zdd_captured_text
                 public  zdd_capture_cursor
                 public  zdd_results

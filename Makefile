@@ -83,7 +83,7 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	# backed implementation of the same name is deliberately left out
 	# of this link; an eventual ELF-DOS interpreter program links that
 	# one in instead, never both together (duplicate symbol).
-	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg
+	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg
 	rm -f diag/zdispatchdiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def

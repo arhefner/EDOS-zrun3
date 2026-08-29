@@ -61,12 +61,22 @@ zd_store_flag:
             mov     rb, zdd_results+3
             call    zd_report
 
+            call    K_INMSG
+            db      "check 4 (attributes, object-tree queries): ",0
+            mov     rb, zdd_results+4
+            call    zd_report
+
+            call    K_INMSG
+            db      "check 5 (properties, insert_obj, remove_obj): ",0
+            mov     rb, zdd_results+5
+            call    zd_report
+
             mov     rf, zd_had_failure
             ldn     rf
             lbnz    zd_some_failed
 
             call    K_INMSG
-            db      "All 4 checks passed.",13,10,0
+            db      "All 6 checks passed.",13,10,0
             ldi     0
             lbr     zd_exit
 
