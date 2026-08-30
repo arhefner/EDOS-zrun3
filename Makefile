@@ -62,7 +62,7 @@ asm: $(ASM_MODULES)
 # diag/ztermdiag_main is different: it's an interactive demo, not an
 # automated check list (see zterm.asm's own header comment for why).
 diag: $(ASM_MODULES) $(DIAG_MODULES)
-	$(LINK) $(LFLAGS) -o diag/zdiag diag/zdiag_main.prg diag/zdiag.prg lib/zmem.prg lib/zstack.prg
+	$(LINK) $(LFLAGS) -o diag/zdiag diag/zdiag_main.prg diag/zdiag.prg lib/zmem.prg lib/zcache.prg lib/zstack.prg
 	rm -f diag/zdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zobjdiag diag/zobjdiag_main.prg diag/zobjdiag.prg lib/zobj.prg
 	rm -f diag/zobjdiag.lkb
@@ -76,9 +76,9 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/ztermdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zdecdiag diag/zdecdiag_main.prg diag/zdecdiag.prg lib/zdec.prg
 	rm -f diag/zdecdiag.lkb
-	$(LINK) $(LFLAGS) -o diag/zdecodediag diag/zdecodediag_main.prg diag/zdecodediag.prg lib/zdecode.prg lib/zmem.prg
+	$(LINK) $(LFLAGS) -o diag/zdecodediag diag/zdecodediag_main.prg diag/zdecodediag.prg lib/zdecode.prg lib/zmem.prg lib/zcache.prg
 	rm -f diag/zdecodediag.lkb
-	$(LINK) $(LFLAGS) -o diag/zvardiag diag/zvardiag_main.prg diag/zvardiag.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg
+	$(LINK) $(LFLAGS) -o diag/zvardiag diag/zvardiag_main.prg diag/zvardiag.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zcache.prg
 	rm -f diag/zvardiag.lkb
 	# diag/zdispatchdiag.prg supplies its own zdisp_emit_string (a
 	# capture-buffer test double, so print/new_line stay bare-metal
@@ -93,7 +93,7 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	# zdisp_read_line needs but the test double doesn't); an eventual
 	# ELF-DOS interpreter program links the real ones in instead, never
 	# both together (duplicate symbol).
-	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg lib/ymodem.prg lib/fmt32.prg lib/zdict.prg lib/zparse.prg
+	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg lib/ymodem.prg lib/fmt32.prg lib/zdict.prg lib/zparse.prg lib/zcache.prg
 	rm -f diag/zdispatchdiag.lkb
 
 lib/%.prg: lib/%.asm include/opcodes.def
