@@ -112,6 +112,8 @@
             extrn   zparse_init
             extrn   zparse_tokenize
             extrn   zdisp_read_line
+            extrn   zdisp_save_game
+            extrn   zdisp_restore_game
 
             extrn   zdisp_branch
             extrn   zdisp_return
@@ -468,6 +470,18 @@ zds_0op:
             lbz     zds_print_ret
             mov     rf, zdisp_instr+ZDI_OPCODE
             ldn     rf
+            xri     5
+            lbz     zds_save
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     6
+            lbz     zds_restore
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     7
+            lbz     zds_restart
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
             xri     8
             lbz     zds_ret_popped
             mov     rf, zdisp_instr+ZDI_OPCODE
@@ -525,6 +539,14 @@ zds_var:
             ldn     rf
             xri     9
             lbz     zds_pull
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     19
+            lbz     zds_output_stream
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     20
+            lbz     zds_input_stream
             stc
             rtn
 
@@ -1997,6 +2019,79 @@ zds_print_obj:
             call    zdisp_emit_string
             rtn
 
+; ---- save: per the V1-3 branch encoding, the branch is committed
+; unconditionally FIRST (matching host/dispatch.c's own do_branch(
+; instr,1) call -- there's no other way to compute the branch target
+; without duplicating zdisp_branch's own logic), then undone (zdisp_pc
+; reset to the fallthrough zdisp_step already committed before
+; dispatch) only if zdisp_save_game actually fails. Delegates the
+; actual file I/O to zdisp_save_game, a narrow platform hook (matching
+; zdisp_emit_string/zdisp_read_line's own precedent -- the core never
+; touches K_FILE_* directly). If the branch offset is 0 or 1 (return
+; false/true instead of a jump), zdisp_branch already delegated to
+; zdisp_return by the time save's own failure path would try to
+; "undo" it -- host has this same limitation (do_branch's own
+; side effect can't be cleanly reverted either), not fixed here. ----
+zds_save:
+            mov     r8, zdisp_pc
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = fallthrough pc (already
+                                        ; committed by zdisp_step)
+
+            mov     r8, zdisp_value
+            ghi     r9
+            str     r8
+            inc     r8
+            glo     r9
+            str     r8                  ; zdisp_value = fallthrough pc
+                                        ; -- stashed in memory, since
+                                        ; zdisp_branch uses R7 for its
+                                        ; own condition parameter
+
+            ldi     1
+            call    zdisp_branch        ; unconditionally commits the
+                                        ; branch target into zdisp_pc
+
+            call    zdisp_save_game     ; df=1 on failure
+            lbnf    zds_save_done
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = fallthrough pc, reloaded
+            mov     r8, zdisp_pc
+            ghi     r9
+            str     r8
+            inc     r8
+            glo     r9
+            str     r8                  ; undo: zdisp_pc = fallthrough
+
+zds_save_done:
+            clc
+            rtn
+
+; ---- restore: "the branch is never actually made" -- on success,
+; zdisp_restore_game overwrites zdisp_pc wholesale as part of the
+; restored state; on failure, zdisp_pc is left exactly as zdisp_step's
+; own default fallthrough already set it, which IS "falls through
+; normally" ----
+zds_restore:
+            call    zdisp_restore_game  ; df=1 on failure
+            clc
+            rtn
+
+; ---- restart: no pristine-dynamic-memory source exists anywhere in
+; this project yet (no story-loader/interpreter-frontend has been
+; built), so this is an honest "unsupported" stub -- matches host's
+; own documented behavior when ctx->restart is left unconfigured
+; (a decode-recognized but unsupported opcode, not a silent no-op) ----
+zds_restart:
+            stc
+            rtn
+
 ; ---- ret_popped / pop: pop the eval stack (variable 0's own "pops"
 ; semantics via zvar_read) -- ret_popped returns the popped value,
 ; pop just discards it ----
@@ -2011,6 +2106,50 @@ zds_pop:
             ldi     0
             call    zvar_read           ; rf = popped value (discarded),
                                         ; df=err
+            rtn
+
+; ---- output_stream: only streams other than 3 are supported (host's
+; own model doesn't have a separate transcript sink for 2/4 either;
+; here 3's memory-table redirect is additionally declined, since it
+; needs per-character counting that zdisp_emit_string's own batched-
+; string interface doesn't fit) -- +-3 returns DF=1 rather than
+; silently doing nothing; anything else (including -3, tearing down a
+; redirect that was never active) is accepted as a no-op ----
+zds_output_stream:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (signed
+                                        ; stream number)
+
+            ghi     r9
+            lbnz    zdos_check_neg3     ; hi != 0: can't be +3
+            glo     r9
+            xri     3
+            lbz     zdos_unsupported
+            lbr     zdos_ok
+
+zdos_check_neg3:
+            ghi     r9
+            xri     $ff
+            lbnz    zdos_ok             ; hi != 0xff: can't be -3
+            glo     r9
+            xri     $fd
+            lbz     zdos_unsupported
+
+zdos_ok:
+            clc
+            rtn
+
+zdos_unsupported:
+            stc
+            rtn
+
+; ---- input_stream: no-op (matches host -- only one input source
+; exists, so any request is silently accepted) ----
+zds_input_stream:
+            clc
             rtn
 
 zds_error:

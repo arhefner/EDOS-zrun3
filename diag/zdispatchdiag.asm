@@ -50,10 +50,19 @@
             extrn   zvar_init
             extrn   zobj_init
             extrn   zmbase
+            extrn   zmend
             extrn   zdisp_step
 
             extrn   zdisp_pc
             extrn   zdisp_quit
+            extrn   zv_globals_base
+            extrn   zsbase
+            extrn   zsptr
+            extrn   zv_frame_base
+            extrn   zv_frame_ptr
+            extrn   zrand_state
+            extrn   zsv_copy
+            extrn   zdd_save_buf
 
             extrn   zdd_mem0
             extrn   zdd_stack0
@@ -85,12 +94,18 @@
             extrn   zdd_mem9
             extrn   zdd_stack9
             extrn   zdd_frames9
+            extrn   zdd_mem10
+            extrn   zdd_stack10
+            extrn   zdd_frames10
+            extrn   zdd_mem11
+            extrn   zdd_stack11
+            extrn   zdd_frames11
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
             extrn   zdd_canned_input
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     10
+ZDDIAG_COUNT:   equ     12
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -3608,6 +3623,417 @@ zc9_zero_loop:
 zv_fail9:   mov     rb, zdd_results+9
             ldi     1
 zv_store9:  str     rb
+
+; ---- check 10: output_stream / input_stream -- exercises the
+; +-3 == unsupported rule (zds_output_stream returns DF=1 for stream
+; 3's memory-table redirect, which doesn't fit zdisp_emit_string's own
+; batched-string interface -- see its own header) while every other
+; stream number, and input_stream entirely, are accepted as a no-op,
+; matching host's own "no separate transcript sink" simplification. ----
+; ---- check 10: setup ----
+            mov     rd, zdd_mem10
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack10
+            mov     rf, zdd_stack10+16
+            call    zstack_init
+            mov     rd, 0
+            mov     rf, zdd_frames10
+            mov     rc, zdd_frames10+36
+            call    zvar_init
+
+; ---- check 10: program bytes ----
+            mov     rf, zdd_mem10
+            add16   rf, $80
+            ldi     $f3
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $f3
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $03
+            str     rf
+            inc     rf
+            ldi     $f3
+            str     rf
+            inc     rf
+            ldi     $3f
+            str     rf
+            inc     rf
+            ldi     $ff
+            str     rf
+            inc     rf
+            ldi     $fd
+            str     rf
+            inc     rf
+            ldi     $f3
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $02
+            str     rf
+            inc     rf
+            ldi     $f4
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $ba
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $0080
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+
+; ---- check 10: steps ----
+            call    zdisp_step              ; output_stream(1)[expect DF=0] -> pc=$83
+            lbdf    zv_fail10
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail10
+            ldn     rf
+            xri     $83
+            lbnz    zv_fail10
+
+            call    zdisp_step              ; output_stream(3)[expect DF=1]
+            lbnf    zv_fail10               ; expect DF=1
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail10
+            ldn     rf
+            xri     $86
+            lbnz    zv_fail10
+
+            call    zdisp_step              ; output_stream(-3)[expect DF=1]
+            lbnf    zv_fail10               ; expect DF=1
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail10
+            ldn     rf
+            xri     $8a
+            lbnz    zv_fail10
+
+            call    zdisp_step              ; output_stream(2)[expect DF=0] -> pc=$8d
+            lbdf    zv_fail10
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail10
+            ldn     rf
+            xri     $8d
+            lbnz    zv_fail10
+
+            call    zdisp_step              ; input_stream(0)[expect DF=0] -> pc=$90
+            lbdf    zv_fail10
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail10
+            ldn     rf
+            xri     $90
+            lbnz    zv_fail10
+
+            call    zdisp_step              ; quit -> pc=$91
+            lbdf    zv_fail10
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail10
+            ldn     rf
+            xri     $91
+            lbnz    zv_fail10
+            mov     rb, zdd_results+10
+            ldi     0
+            lbr     zv_store10
+zv_fail10:  mov     rb, zdd_results+10
+            ldi     1
+zv_store10: str     rb
+
+; ---- check 11: save / restore / restart -- exercises the V1-3
+; branch-encoding save/restore semantics (save unconditionally commits
+; its own branch target first, then undoes it only if the save itself
+; fails; restore's own branch data is present in the encoding but
+; never evaluated, since a successful restore overwrites zdisp_pc
+; wholesale as part of the restored state). Only ONE restore call ever
+; runs -- its own PC-jump re-enters the code right after save, but
+; nothing further is stepped after that, so there's no risk of
+; re-hitting the same restore instruction a second time (a Z-machine
+; program genuinely cannot detect "was I just restored" from within
+; its own restorable state to loop-and-skip a repeat call -- restore's
+; whole point is that EVERYTHING written after the save point,
+; including any such counter, reverts too; see the globals assertions
+; below, which lean into this rather than fight it: only g16, written
+; BEFORE save, should reflect the corrupt-then-restore round trip,
+; while g18/g21 -- written only after save -- must revert to their
+; untouched pre-save value). Also verifies the eval stack itself was
+; genuinely restored (length and content), not just left alone.
+; restart's own stub (always DF=1, no pristine-memory source exists
+; anywhere in this project yet) is tested separately, via its own
+; fresh mini-program and pc reset, entirely unentangled from the
+; save/restore control flow above. ----
+; ---- check 11: setup ----
+            mov     rd, zdd_mem11
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack11
+            mov     rf, zdd_stack11+16
+            call    zstack_init
+            mov     rd, $00e0
+            mov     rf, zdd_frames11
+            mov     rc, zdd_frames11+36
+            call    zvar_init
+
+            mov     rf, zdd_mem11
+            mov     r8, 256
+zc11_zero_loop:
+            ldi     0
+            str     rf
+            inc     rf
+            sub16   r8, 1
+            glo     r8
+            lbnz    zc11_zero_loop
+            ghi     r8
+            lbnz    zc11_zero_loop
+
+; ---- check 11: program bytes ----
+            mov     rf, zdd_mem11
+            add16   rf, $80
+            ldi     $e8
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $2a
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $6f
+            str     rf
+            inc     rf
+            ldi     $b5
+            str     rf
+            inc     rf
+            ldi     $c5
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $63
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $01
+            str     rf
+            inc     rf
+            ldi     $e9
+            str     rf
+            inc     rf
+            ldi     $7f
+            str     rf
+            inc     rf
+            ldi     $15
+            str     rf
+            inc     rf
+            ldi     $0d
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $de
+            str     rf
+            inc     rf
+            ldi     $b6
+            str     rf
+            inc     rf
+            ldi     $c0
+            str     rf
+
+; ---- check 11: restart mini-program ----
+            mov     rf, zdd_mem11
+            add16   rf, $b0
+            ldi     $b7
+            str     rf
+
+            mov     rf, zdisp_pc            ; pc = $0080
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+
+; landing addr=$8b
+; ---- check 11: steps ----
+            call    zdisp_step              ; push(42) -> pc=$83
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $83
+            lbnz    zv_fail11
+
+            call    zdisp_step              ; store(16,111) -> pc=$86
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $86
+            lbnz    zv_fail11
+
+            call    zdisp_step              ; save[taken] -> pc=$8b
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $8b
+            lbnz    zv_fail11
+
+            call    zdisp_step              ; store(18,1) -> pc=$8e
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $8e
+            lbnz    zv_fail11
+
+            call    zdisp_step              ; pull(g21) -> pc=$91
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $91
+            lbnz    zv_fail11
+
+            call    zdisp_step              ; store(16,222)[corrupt] -> pc=$94
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $94
+            lbnz    zv_fail11
+
+            call    zdisp_step              ; restore -> pc=$8b
+            lbdf    zv_fail11
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $8b
+            lbnz    zv_fail11
+
+; ---- check 11: eval stack restored to contain [42] ----
+            mov     rf, zsbase
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = *zsbase
+            mov     rf, zsptr
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = *zsptr
+            mov     r8, ra
+            sub16   r8, r9              ; r8 = *zsptr - *zsbase (length)
+            glo     r8
+            xri     2
+            lbnz    zv_fail11
+            ghi     r8
+            lbnz    zv_fail11           ; length must be exactly 2
+
+            mov     rf, r9
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $2a
+            lbnz    zv_fail11           ; content must be 0x002A (42)
+
+; ---- check 11: globals (all written after the save point must revert to their untouched pre-save value; only g16, written BEFORE save, should reflect the corrupt-then-restore round trip) ----
+            ; global16 addr=$00e0 (g16: set before save, corrupted, restored)
+            mov     rf, zdd_mem11
+            add16   rf, $00e0
+            ldn     rf
+            lbnz    zv_fail11
+            inc     rf
+            ldn     rf
+            xri     $6f
+            lbnz    zv_fail11
+
+            ; global18 addr=$00e4 (g18: set only after save -- reverted to untouched)
+            mov     rf, zdd_mem11
+            add16   rf, $00e4
+            ldn     rf
+            lbnz    zv_fail11
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail11
+
+            ; global21 addr=$00ea (g21: set only after save (by pull) -- reverted)
+            mov     rf, zdd_mem11
+            add16   rf, $00ea
+            ldn     rf
+            lbnz    zv_fail11
+            inc     rf
+            ldn     rf
+            lbnz    zv_fail11
+
+; ---- check 11: restart (separate mini-program, fresh pc) ----
+            mov     rf, zdisp_pc
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $b0
+            str     rf
+
+            call    zdisp_step              ; restart[expect DF=1]
+            lbnf    zv_fail11               ; expect DF=1
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail11
+            ldn     rf
+            xri     $b1
+            lbnz    zv_fail11
+            mov     rb, zdd_results+11
+            ldi     0
+            lbr     zv_store11
+zv_fail11:  mov     rb, zdd_results+11
+            ldi     1
+zv_store11: str     rb
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -3694,6 +4120,243 @@ zdrl_copy_done:
             rtn
             endp
 
+; zdisp_save_game / zdisp_restore_game (test double, replacing
+; lib/zdispsave.asm's real K_FILE-backed pair): writes/reads the exact
+; same self-describing state blob (see lib/zdispsave.asm's own header
+; for the field layout) into/from zdd_save_buf instead of a real file,
+; so save/restore stay bare-metal testable. Always succeeds (DF=0).
+            proc    zdisp_save_game
+            mov     r9, zdd_save_buf   ; r9 = write cursor
+
+            mov     r8, zdisp_pc
+            lda     r8
+            str     r9
+            inc     r9
+            ldn     r8
+            str     r9
+            inc     r9                  ; pc
+
+            mov     r8, zv_globals_base
+            lda     r8
+            str     r9
+            inc     r9
+            ldn     r8
+            str     r9
+            inc     r9                  ; globals_base
+
+            mov     r8, zsptr
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = *zsptr
+            mov     r8, zsbase
+            lda     r8
+            phi     rb
+            ldn     r8
+            plo     rb                  ; rb = *zsbase
+            mov     r7, ra
+            sub16   r7, rb              ; r7 = eval stack length
+
+            ghi     r7
+            str     r9
+            inc     r9
+            glo     r7
+            str     r9
+            inc     r9
+
+            mov     r8, rb              ; r8 = copy source (*zsbase)
+            call    zsv_copy
+
+            mov     r8, zv_frame_ptr
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra
+            mov     r8, zv_frame_base
+            lda     r8
+            phi     rb
+            ldn     r8
+            plo     rb
+            mov     r7, ra
+            sub16   r7, rb              ; r7 = frame stack length
+
+            ghi     r7
+            str     r9
+            inc     r9
+            glo     r7
+            str     r9
+            inc     r9
+
+            mov     r8, rb
+            call    zsv_copy
+
+            mov     r8, zrand_state
+            ldi     4
+            plo     r7
+            ldi     0
+            phi     r7
+            call    zsv_copy
+
+            mov     r8, zmend
+            lda     r8
+            phi     r7
+            ldn     r8
+            plo     r7                  ; r7 = *zmend (dynamic memory
+                                        ; length)
+            ghi     r7
+            str     r9
+            inc     r9
+            glo     r7
+            str     r9
+            inc     r9
+
+            mov     r8, zmbase
+            lda     r8
+            phi     ra
+            ldn     r8
+            plo     ra                  ; ra = *zmbase
+            mov     r8, ra
+            call    zsv_copy
+
+            clc
+            rtn
+            endp
+
+; zsv_copy (internal, shared by zdisp_save_game/zdisp_restore_game):
+; R8 = source, R9 = destination, R7 = byte count (set immediately
+; before the call). Copies R7 bytes from R8 to R9, advancing both.
+; Called from within the same proc's own logic via a plain `call`, but
+; also from zdisp_restore_game below -- needs extrn/public since it's
+; a separate proc, same as every other same-file cross-proc helper in
+; this project.
+            proc    zsv_copy
+zsvc_loop:
+            glo     r7
+            lbnz    zsvc_have
+            ghi     r7
+            lbz     zsvc_done
+zsvc_have:
+            ldn     r8
+            str     r9
+            inc     r8
+            inc     r9
+            sub16   r7, 1
+            lbr     zsvc_loop
+zsvc_done:
+            rtn
+            endp
+
+            proc    zdisp_restore_game
+            mov     r8, zdd_save_buf   ; r8 = read cursor into the
+                                        ; save buffer (the SOURCE
+                                        ; register zsv_copy expects)
+
+            mov     r9, zdisp_pc
+            lda     r8
+            str     r9
+            inc     r9
+            lda     r8
+            str     r9                  ; pc
+
+            mov     r9, zv_globals_base
+            lda     r8
+            str     r9
+            inc     r9
+            lda     r8
+            str     r9                  ; globals_base
+
+            lda     r8
+            phi     r7
+            lda     r8
+            plo     r7                  ; r7 = eval stack length
+
+            mov     r9, zsbase
+            lda     r9
+            phi     ra
+            ldn     r9
+            plo     ra                  ; ra = *zsbase (copy dest)
+
+            mov     rb, ra
+            add16   rb, r7              ; rb = *zsbase + length = the
+                                        ; new zsptr -- computed BEFORE
+                                        ; zsv_copy, which decrements r7
+                                        ; to 0 as its own loop counter
+                                        ; (rb itself survives zsv_copy,
+                                        ; which only touches r7/r8/r9)
+
+            mov     r9, ra
+            call    zsv_copy            ; r8 advances past the eval
+                                        ; stack content, ready for the
+                                        ; frame-stack length field
+
+            mov     r9, zsptr
+            ghi     rb
+            str     r9
+            inc     r9
+            glo     rb
+            str     r9                  ; zsptr = the stashed new value
+
+            lda     r8
+            phi     r7
+            lda     r8
+            plo     r7                  ; r7 = frame stack length
+
+            mov     r9, zv_frame_base
+            lda     r9
+            phi     ra
+            ldn     r9
+            plo     ra                  ; ra = *zv_frame_base
+
+            mov     rb, ra
+            add16   rb, r7              ; new frame_ptr, computed
+                                        ; before zsv_copy (same reason
+                                        ; as the eval-stack section
+                                        ; above)
+
+            mov     r9, ra
+            call    zsv_copy
+
+            mov     r9, zv_frame_ptr
+            ghi     rb
+            str     r9
+            inc     r9
+            glo     rb
+            str     r9                  ; zv_frame_ptr = the stashed
+                                        ; new value
+
+            mov     r9, zrand_state
+            ldi     4
+            plo     r7
+            ldi     0
+            phi     r7
+            call    zsv_copy            ; rand_state (raw 4 bytes)
+
+            lda     r8
+            phi     r7
+            lda     r8
+            plo     r7                  ; r7 = dynamic memory length
+                                        ; (also the new zmend)
+
+            mov     r9, zmend
+            ghi     r7
+            str     r9
+            inc     r9
+            glo     r7
+            str     r9                  ; zmend = length
+
+            mov     r9, zmbase
+            lda     r9
+            phi     ra
+            ldn     r9
+            plo     ra                  ; ra = *zmbase
+
+            mov     r9, ra
+            call    zsv_copy            ; dynamic memory content
+
+            clc
+            rtn
+            endp
+
             proc    _zdispatchdiag_data
 zdd_mem0:       ds      64
 zdd_stack0:     ds      16
@@ -3725,9 +4388,21 @@ zdd_frames8:    ds      72                  ; 2 frames * 36 bytes
 zdd_mem9:       ds      256
 zdd_stack9:     ds      16
 zdd_frames9:    ds      36                  ; 1 frame * 36 bytes
+zdd_mem10:      ds      256
+zdd_stack10:    ds      16
+zdd_frames10:   ds      36                  ; 1 frame * 36 bytes
+zdd_mem11:      ds      256
+zdd_stack11:    ds      16
+zdd_frames11:   ds      36                  ; 1 frame * 36 bytes
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
 zdd_canned_input: db    "cat dog",0
+zdd_save_buf:   ds      300     ; pc(2)+globals_base(2)+eval stack
+                                ; len(2)+content+frame stack len(2)+
+                                ; content+rand_state(4)+dynamic memory
+                                ; len(2)+content (up to check11's own
+                                ; 256-byte zminit call) -- comfortably
+                                ; oversized
 zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem0
                 public  zdd_stack0
@@ -3759,8 +4434,15 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem9
                 public  zdd_stack9
                 public  zdd_frames9
+                public  zdd_mem10
+                public  zdd_stack10
+                public  zdd_frames10
+                public  zdd_mem11
+                public  zdd_stack11
+                public  zdd_frames11
                 public  zdd_captured_text
                 public  zdd_capture_cursor
                 public  zdd_canned_input
+                public  zdd_save_buf
                 public  zdd_results
             endp
