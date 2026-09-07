@@ -80,23 +80,21 @@ Installed at `/opt/elfc/{asm02,link02}`.
 
 ## Status
 
-**ZORK I plays end to end** under Run/02 with a real ELF-DOS disk image
-(banner, room descriptions, parser, object/container handling, score and
-move counters, status line), and ZORK III boots and plays too. The
-long-parked ">64K story file" blocker below is root-caused and fixed.
+**Working on real hardware.** ZORK I, ZORK II and MOONMIST have all been
+confirmed on the target machine; ZORK III and SEASTALKER play under
+Run/02. Banner, room descriptions, the parser, object and container
+handling, score/move counters, time-mode status lines, combat, death and
+resurrection all behave. The long-parked ">64K story file" blocker below
+is root-caused and fixed, and every V3 title in the sample library now
+fits in RAM (see the memory budget below).
 
-Hardware round 1 (`~/claude_io/zr21.txt`) got as far as the banner plus
-"West of House" and then stopped with a bogus decode error — bug 14
-below, the one failure mode the emulator was too forgiving to show. Fixed,
-and the emulator taught to reproduce it (`RUN02_DIRTY_DF`, see
-`tools/emu/README.md`). **Hardware round 2 confirmed working.**
-
-Since that confirmation the build has changed in one way that has NOT
-been on hardware yet: `-r` is back on (see the memory budget below), which
-rewrites 430 branches. It passes the full diag suite and playthroughs of
-ZORK I, ZORK III and MOONMIST under Run/02 with `RUN02_DIRTY_DF=1`, but
-branch relaxation is exactly the sort of change that deserves its own
-hardware check.
+Getting here took two hardware rounds after the emulator work. Round 1
+(`~/claude_io/zr21.txt`) reached the banner plus "West of House" and then
+stopped with a bogus decode error — bug 14 below, the one failure mode
+the emulator was too forgiving to show, now reproducible locally via
+`RUN02_DIRTY_DF` (see `tools/emu/README.md`). Round 2 confirmed the fix.
+Round 3 confirmed the `-r` re-enable, which rewrites 430 branches and is
+what brings MOONMIST inside the memory budget.
 
 ## Memory budget (real hardware: `mem_top - PROG_BASE` = 44927)
 

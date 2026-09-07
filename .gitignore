@@ -26,3 +26,7 @@
 /zrun3_main.build
 /zrun3_main.lst
 /zrun3_main.prg
+
+# Claude Code: settings.json is shared project config and IS tracked;
+# settings.local.json is personal and must not be.
+/.claude/settings.local.json

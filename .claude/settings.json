@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/elfc/asm02 -r -I .. zdispatch.asm)",
+      "Bash(/opt/elfc/asm02 -r -I .. zdispatchdiag.asm)",
+      "Bash(/opt/elfc/asm02 -r -I .. zdispatchdiag_main.asm)",
+      "Bash(make asm *)",
+      "Bash(echo \"ASM_EXIT=$?\")",
+      "Bash(make diag *)",
+      "Bash(echo \"DIAG_EXIT=$?\")"
+    ]
+  }
+}
