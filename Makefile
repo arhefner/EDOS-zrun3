@@ -3,9 +3,9 @@ CFLAGS ?= -std=c99 -Wall -Wextra -Werror -Ihost
 
 HOST_TEST = build/test_host
 ASM ?= /opt/elfc/asm02
-ASMFLAGS ?= -I ..
+ASMFLAGS ?= -r -I ..
 LINK ?= /opt/elfc/link02
-LFLAGS ?= -b -be
+LFLAGS ?= -b -be -r
 
 HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/ztext.c host/objects.c host/properties.c host/dictionary.c \

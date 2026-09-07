@@ -52,6 +52,7 @@
             extrn   zstatus_had_error
             extrn   zstatus_buf
             extrn   zstatus_numbuf
+            extrn   zstatus_minutes
             extrn   zstatus_env_columns
             extrn   zstatus_env_rows
             extrn   zstatus_esc_save
@@ -250,6 +251,31 @@ zsd_time_mode:
 
             ldi     18
             call    zvar_read               ; rf = minutes
+            mov     r8, zstatus_minutes     ; stash it: the '0' pad below
+            ghi     rf                      ; goes out through K_TYPE,
+            str     r8                      ; which no register survives
+            inc     r8
+            glo     rf
+            str     r8
+
+; zero-pad the minutes: the Z-machine's time status line is HH:MM, so a
+; minute under 10 needs a leading '0' -- without it MOONMIST's own clock
+; read "Time: 19:0" rather than "19:00" for the first ten minutes of
+; every hour. Only 0-9 is padded; anything negative (which shouldn't
+; happen) is left to print_signed's own '-' handling.
+            ghi     rf
+            lbnz    zsd_min_wide            ; >= 256, certainly not < 10
+            glo     rf
+            smi     10
+            lbdf    zsd_min_wide            ; DF=1 (no borrow): >= 10
+            ldi     '0'
+            call    zterm_print_char
+zsd_min_wide:
+            mov     r8, zstatus_minutes     ; reload -- see the stash above
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf
             call    zstatus_print_signed
 
 zsd_done:
@@ -336,6 +362,8 @@ zstatus_rows:            dw      24
 zstatus_had_error:       db      0
 zstatus_buf:             ds      512
 zstatus_numbuf:          ds      12
+zstatus_minutes:         dw      0   ; the minutes value, held across
+                                     ; the zero-pad's own K_TYPE call
 zstatus_env_columns:     db      "COLUMNS",0
 zstatus_env_rows:        db      "ROWS",0
 zstatus_esc_save:        db      27,"[s",0
@@ -353,6 +381,7 @@ zstatus_label_time:      db      "Time: ",0
                 public  zstatus_had_error
                 public  zstatus_buf
                 public  zstatus_numbuf
+                public  zstatus_minutes
                 public  zstatus_env_columns
                 public  zstatus_env_rows
                 public  zstatus_esc_save

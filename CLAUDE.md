@@ -89,18 +89,31 @@ Hardware round 1 (`~/claude_io/zr21.txt`) got as far as the banner plus
 "West of House" and then stopped with a bogus decode error — bug 14
 below, the one failure mode the emulator was too forgiving to show. Fixed,
 and the emulator taught to reproduce it (`RUN02_DIRTY_DF`, see
-`tools/emu/README.md`); the whole diag suite and a playthrough now pass
-with that set. **Awaiting hardware round 2.**
+`tools/emu/README.md`). **Hardware round 2 confirmed working.**
+
+Since that confirmation the build has changed in one way that has NOT
+been on hardware yet: `-r` is back on (see the memory budget below), which
+rewrites 430 branches. It passes the full diag suite and playthroughs of
+ZORK I, ZORK III and MOONMIST under Run/02 with `RUN02_DIRTY_DF=1`, but
+branch relaxation is exactly the sort of change that deserves its own
+hardware check.
 
 ## Memory budget (real hardware: `mem_top - PROG_BASE` = 44927)
 
-zrun3 is ~23.4KB, leaving ~21.4KB of heap. A story needs
+zrun3 is ~23.1KB, leaving ~21.3KB of heap. A story needs
 `dynamic_end + 512 (eval stack) + 592 (frames) + dictionary` resident.
-Every V3 title in the sample library fits except MOONMIST, which is
-**188 bytes** over — the tightest are MOONMIST (-188), SEASTALKER
-(+1256), WISHBRINGER (+1604), SORCERER (+1768). Margin is real but thin,
-so gotcha #5 (program size costs heap directly) still applies: check the
-budget before adding anything permanent.
+**Every V3 title in the sample library now fits**, but the margin is
+genuinely thin at the top: MOONMIST +196 bytes, SEASTALKER +1640,
+WISHBRINGER +1988, SORCERER +2152. Gotcha #5 (program size costs heap
+directly, byte for byte) is therefore live — roughly every 200 bytes
+added to the binary drops another title off the end of that list. Check
+the budget before adding anything permanent.
+
+MOONMIST only fits because of `-r`. Branch relaxation was switched off
+during the ">64K seek" hunt and left off; re-enabling it shortened 430 of
+628 long branches and saved 418 bytes, which was the difference between
+MOONMIST missing by 188 and clearing by 196. Keep `-r` on in both
+`ASMFLAGS` and `LFLAGS`.
 
 ## Local emulation (Run/02) — this project CAN be run locally now
 
@@ -150,9 +163,14 @@ address. `diag/zseekdiag_main.asm` never reproduced it because its own two
 
 Everything else in the old bisection trail (the kernel `file_read`
 lookahead fix, the RAM measurement, the `-r` experiments) was real work but
-unrelated. `diag/zseekdiag_main.asm` still references the `zcdiag_*`
-globals that the fix removed, so it no longer assembles; it has served its
-purpose and can be deleted.
+unrelated. `diag/zseekdiag_main.asm` has been deleted — it referenced the
+`zcdiag_*` globals the fix removed, so it no longer assembled, and it had
+served its purpose. It was never committed, so it appears in no history;
+recover it from a session transcript if it is ever wanted again.
+
+One leftover from that trail was worth reversing: `-r` had been switched
+off while chasing the bug and never switched back. See the memory budget
+above for what it was costing.
 
 ## Bugs found via local emulation (all fixed)
 
