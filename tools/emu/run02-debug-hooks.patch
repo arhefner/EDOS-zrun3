@@ -1,0 +1,83 @@
+--- /home/tony/projects/elf/Run02/cpu.c	2026-01-08 11:55:35.754618061 -0500
++++ /tmp/cpu_patched.c	2026-09-07 09:17:40.889750071 -0400
+@@ -559,6 +559,9 @@
+   ram = cpu->ram;
+   ram += cpu->r[15];
+   read(disk, ram, 512);
++  { const char* lp = getenv("RUN02_IDELOG");
++    if (lp) { FILE* lf = fopen(lp,"a");
++      if (lf) { fprintf(lf,"READ lba=%lu dest=%04x\n",(unsigned long)(pos>>9),cpu->r[15]); fclose(lf); } } }
+   cpu->r[15] += 512;
+   cpu->df = 0;
+   close(disk);
+@@ -864,6 +867,7 @@
+              if (cpu->d == 0x0c) printf("\e[2J\e[1;1H");
+                else printf("%c",cpu->d);
+              fflush(stdout);
++             if (getenv("RUN02_DIRTY_DF")) cpu->df = 1;  /* see f_type */
+              sret(cpu);
+              if (showTrace) trace(tbuffer);
+              return;
+@@ -875,6 +879,7 @@
+              if (cpu->d == 0x0c) printf("\e[2J\e[1;1H");
+                else printf("%c",cpu->d);
+              fflush(stdout);
++             if (getenv("RUN02_DIRTY_DF")) cpu->df = 1;  /* see f_type */
+              sret(cpu);
+              if (showTrace) trace(tbuffer);
+              return;
+@@ -1025,6 +1030,12 @@
+            if (cpu->d == 0x0c) printf("\e[2J\e[1;1H");
+              else printf("%c",cpu->d);
+            fflush(stdout);
++           /* RUN02_DIRTY_DF: f_type's DF is not part of its contract, and on
++            * real hardware it comes back SET. Emulating it as 0 lets any
++            * caller that wrongly treats K_TYPE/K_MSG's DF as a result pass
++            * here and fail on hardware -- exactly how zrun3's print_obj bug
++            * hid. Set this to make the emulator pessimistic. */
++           if (getenv("RUN02_DIRTY_DF")) cpu->df = 1;
+            sret(cpu);
+            if (showTrace) trace(tbuffer);
+            return;
+@@ -1475,6 +1486,30 @@
+       }
+     }
+ 
++  { static FILE* zpf = NULL; static int zinit = 0;
++    static unsigned zhook = 0, zpca = 0;
++    if (!zinit) { const char* h = getenv("RUN02_ZHOOK");
++                  const char* a = getenv("RUN02_ZPC");
++                  const char* o = getenv("RUN02_ZLOG");
++                  if (h && a && o) { zhook = strtoul(h,0,16); zpca = strtoul(a,0,16);
++                                     zpf = fopen(o,"w"); }
++                  zinit = 1; }
++    { static unsigned dpc = 0; static int dinit = 0; static int done = 0;
++      if (!dinit) { const char* v = getenv("RUN02_DUMPPC"); if (v) dpc = strtoul(v,0,16); dinit = 1; }
++      if (dpc && !done && cpu->r[cpu->p] == dpc) {
++        const char* dp = getenv("RUN02_RAMDUMP");
++        if (dp) { FILE* df = fopen(dp,"wb");
++                  if (df) { fwrite(cpu->ram,1,65536,df); fclose(df); } }
++        done = 1; } }
++    if (zpf && cpu->r[cpu->p] == zhook)
++      { unsigned op = 0; const char* o2 = getenv("RUN02_ZOPS");
++        if (o2) op = strtoul(o2,0,16);
++        if (op) fprintf(zpf, "%02x:%02x%02x  op0=%02x%02x op1=%02x%02x\n",
++                        cpu->ram[zpca+2], cpu->ram[zpca], cpu->ram[zpca+1],
++                        cpu->ram[op], cpu->ram[op+1], cpu->ram[op+2], cpu->ram[op+3]);
++        else fprintf(zpf, "%02x:%02x%02x\n", cpu->ram[zpca+2], cpu->ram[zpca], cpu->ram[zpca+1]);
++        fflush(zpf); }
++  }
+   i = readMem(cpu, cpu->r[cpu->p]++);
+   imap[i]++;
+   cpu->n = i & 0xf;
+@@ -1495,6 +1530,10 @@
+     case 0:                                                                // LDN
+          if (cpu->n == 0) {                                                // IDL
+            if (showTrace) strcat(tbuffer, "IDL");
++           { const char* dp = getenv("RUN02_RAMDUMP");
++             if (dp) { FILE* df = fopen(dp,"wb");
++               if (df) { fwrite(cpu->ram,1,65536,df); fclose(df);
++                 fprintf(stderr,"\n[run02: RAM dumped to %s at IDL, PC(R%X)=%04x]\n", dp, cpu->p, cpu->r[cpu->p]); } } }
+            cpu->idle = 1;
+            }
+          else {
