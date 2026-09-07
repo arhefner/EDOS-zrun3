@@ -52,13 +52,23 @@ zd_store_flag:
             call    zd_report
 
             call    K_INMSG
-            db      "check 2 (decode '4!', A2 shift): ",0
+            db      "check 2 (decode '4'+newline+'!', A2 shift): ",0
             mov     rb, zd_results+2
             call    zd_report
 
             call    K_INMSG
-            db      "check 3 (abbreviation z-char rejected): ",0
+            db      "check 3 (abbreviation with no table configured fails cleanly): ",0
             mov     rb, zd_results+3
+            call    zd_report
+
+            call    K_INMSG
+            db      "check 4 (abbreviation expansion, 'xhiy'): ",0
+            mov     rb, zd_results+4
+            call    zd_report
+
+            call    K_INMSG
+            db      "check 5 (nested abbreviation reference rejected): ",0
+            mov     rb, zd_results+5
             call    zd_report
 
             mov     rf, zd_had_failure
@@ -66,7 +76,7 @@ zd_store_flag:
             lbnz    zd_some_failed
 
             call    K_INMSG
-            db      "All 4 checks passed.",13,10,0
+            db      "All 6 checks passed.",13,10,0
             ldi     0
             lbr     zd_exit
 

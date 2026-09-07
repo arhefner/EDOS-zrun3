@@ -238,14 +238,88 @@ int main(void)
     image[20] = 0x12;
     image[21] = 0x34;
     assert(story_mem_read16(&memory, 20, &word) == 0 && word == 0x1234);
-    assert(ztext_decode(hello, sizeof(hello), append_char, text) == 0);
+    assert(ztext_decode(hello, sizeof(hello), append_char, text, 0, 0, 0) == 0);
     assert(strcmp(text, "hello") == 0);
+    {
+        /* abbreviation expansion: "x" + abbrev(0)="hi" + "y" = "xhiy".
+         * z-char 1 (marker) with the following z-char 0 selects
+         * abbreviation index 32*(1-1)+0 = 0, whose table entry (a
+         * packed address) points at a separate "hi" string -- placed
+         * at unrelated offsets in the same image to confirm the
+         * lookup genuinely goes through the table, not something
+         * adjacent to the main text. */
+        uint8_t abbrev_image[96] = {0};
+        uint16_t abbrev_words[] = {zword(13, 14, 5, 1)};      /* "hi" */
+        uint16_t main_words[] = {zword(29, 1, 0, 0), zword(30, 5, 5, 1)};
+        char abbrev_text[8] = "";
+        unsigned index;
+
+        for (index = 0; index < 1; ++index) {
+            abbrev_image[0x50 + index * 2] = (uint8_t)(abbrev_words[index] >> 8);
+            abbrev_image[0x51 + index * 2] = (uint8_t)abbrev_words[index];
+        }
+        abbrev_image[0x40] = 0x00;     /* abbrev table entry 0: packed
+                                        * addr 0x28 -> byte addr 0x50 */
+        abbrev_image[0x41] = 0x28;
+        abbrev_image[0x10] = (uint8_t)(main_words[0] >> 8);
+        abbrev_image[0x11] = (uint8_t)main_words[0];
+        abbrev_image[0x12] = (uint8_t)(main_words[1] >> 8);
+        abbrev_image[0x13] = (uint8_t)main_words[1];
+
+        assert(ztext_decode(abbrev_image + 0x10, 4, append_char,
+                            abbrev_text, abbrev_image,
+                            sizeof(abbrev_image), 0x40) == 0);
+        assert(strcmp(abbrev_text, "xhiy") == 0);
+
+        /* an abbreviation whose own text references z-char 1-3 again
+         * is rejected, not expanded a second level */
+        abbrev_image[0x50] = (uint8_t)(zword(1, 0, 5, 1) >> 8);
+        abbrev_image[0x51] = (uint8_t)zword(1, 0, 5, 1);
+        abbrev_text[0] = '\0';
+        assert(ztext_decode(abbrev_image + 0x10, 4, append_char,
+                            abbrev_text, abbrev_image,
+                            sizeof(abbrev_image), 0x40) != 0);
+    }
         assert(story_header_parse(header_image, sizeof(header_image), &header) == 0);
         assert(header.release == 7 && header.file_length == 128 &&
             strcmp(header.serial, "880401") == 0);
         header_image[14] = 0x00;
         header_image[15] = 0x20;
         assert(story_header_parse(header_image, sizeof(header_image), &header) != 0);
+    {
+        /* ZORK I's own real header (first 64 bytes, byte-for-byte) --
+         * its dictionary (0x3b21) sits in STATIC memory, above its own
+         * static_memory base (0x2e53), which is the normal, correct
+         * place for a read-only dictionary in any real compiled V3
+         * file. An earlier version of this parser rejected that as
+         * invalid (a "dictionary must be below static_memory" check
+         * that was simply backwards), which would have refused to
+         * load this file -- caught by testing against a real header
+         * instead of only synthetic ones. */
+        static const uint8_t zork1_header[64] = {
+            0x03,0x00,0x00,0x58,0x4e,0x37,0x4f,0x05,
+            0x3b,0x21,0x02,0xb0,0x22,0x71,0x2e,0x53,
+            0x00,0x00,0x38,0x34,0x30,0x37,0x32,0x36,
+            0x01,0xf0,0xa5,0xc6,0xa1,0x29,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+            0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00
+        };
+        struct story_header zork1;
+
+        /* story_header_parse only reads the header's own first 64
+         * bytes; `length` here is just the declared-vs-actual bound
+         * check, so the real file's own actual length (84876, from
+         * this same header's own bytes 26-27) is passed even though
+         * this test buffer holds only the header itself. */
+        assert(story_header_parse(zork1_header, 84876, &zork1) == 0);
+        assert(zork1.initial_pc == 0x4f05 && zork1.dictionary == 0x3b21 &&
+              zork1.object_table == 0x02b0 && zork1.globals == 0x2271 &&
+              zork1.static_memory == 0x2e53 &&
+              zork1.high_memory == 0x4e37 &&
+              zork1.abbreviations == 0x01f0);
+    }
         vm_state_init(&state, 0x30, 0x100);
         assert(vm_push(&state, 0x1111) == 0);
         assert(vm_push(&state, 0x2222) == 0);
@@ -395,7 +469,7 @@ int main(void)
         char decoded_upper[8] = "";
         assert(ztext_encode("Hi", 2, encoded_upper) == 0);
         assert(ztext_decode(encoded_upper, ZTEXT_V3_ENCODED_LENGTH,
-                            append_char, decoded_upper) == 0);
+                            append_char, decoded_upper, 0, 0, 0) == 0);
         assert(strcmp(decoded_upper, "Hi") == 0);
     }
     assert(ztext_encode("h@i", 3, dict_encoded) != 0);   /* '@' unencodable */

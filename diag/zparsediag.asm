@@ -24,6 +24,12 @@ ZPARSEDIAG_COUNT:       equ     5
 
             proc    zpdiag_run
             mov     rd, zt_dict
+            mov     rf, zt_dict              ; guest address == real
+                                        ; address here: this
+                                        ; diagnostic's fake
+                                        ; dictionary is checked
+                                        ; through real pointers
+                                        ; throughout
             call    zdict_init
 
             mov     rd, zt_text

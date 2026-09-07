@@ -12,6 +12,7 @@
             extrn   zcvalid
             extrn   zcreq_hi
             extrn   zcreq_lo
+            extrn   zcfail_op
 
 ; zcinit: RD = open story FCB, RF = 512-byte cache buffer.
             proc    zcinit
@@ -149,11 +150,18 @@ zcmiss:
             phi     rd
             ldn     rb
             plo     rd
-            mov     ra, r8
-            mov     r9, r9
+
+            mov     ra, r8              ; ra = offset high word
+                                        ; (r9 already holds the low
+                                        ; word, masked to this window's
+                                        ; own 512-byte boundary above)
+
             ldi     0
             plo     rc
             phi     rc
+            mov     rb, zcfail_op
+            ldi     1                   ; 1 = about to attempt the seek
+            str     rb
             call    K_FILE_SEEK
             lbdf    zciofail
             mov     rb, zcfcb
@@ -170,6 +178,9 @@ zcmiss:
             phi     rc
             ldi     0
             plo     rc
+            mov     rb, zcfail_op
+            ldi     2                   ; 2 = about to attempt the read
+            str     rb
             call    K_FILE_READ
             lbdf    zciofail
             mov     rb, zccount
@@ -192,8 +203,53 @@ zcmiss:
             ldn     rb
             plo     r9
             mov     rb, r8
-            sub16   rb, r9
-            lbr     zchit_offset
+            sub16   rb, r9              ; rb = offset within the window
+                                        ; just (re)filled
+
+; ---- check the freshly filled window directly, INLINE, rather than
+; jumping back into zchit_offset: zchit_offset's own "offset >=
+; zccount" miss case branches to zcmiss to refill and retry, which is
+; correct the first time a stale/mismatched window is discovered, but
+; is an infinite loop here -- this window was JUST filled with
+; whatever K_FILE_READ actually returned (zccount, from real story-
+; file length, never wider than the file has bytes left), so
+; re-seeking and re-reading the identical window on a second miss
+; yields the identical (still too-short) zccount forever. A request
+; landing past a real, short file's own end must fail as genuine EOF
+; here instead. (Never triggered before this: nothing previously
+; requested a byte past a real file's own length within a single
+; window.) ----
+            mov     r8, rb
+            mov     rb, zccount
+            lda     rb
+            phi     r9
+            ldn     rb
+            plo     r9
+            mov     rb, r8
+            sub16   rb, r9              ; rb = offset - zccount; DF=1
+                                        ; (no borrow) means offset >=
+                                        ; zccount -- genuinely past the
+                                        ; end of the story file
+            lbdf    zcm_eof
+
+            mov     rf, zcbuf
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9
+            mov     rf, r9
+            add16   rf, r8
+            ldn     rf
+            clc
+            rtn
+
+zcm_eof:
+; the window itself is still validly populated (correct for any other
+; in-range offset) -- only THIS particular offset is out of range, so
+; zcvalid is deliberately left alone (unlike zciofail's own I/O-
+; failure case, which really does invalidate the window)
+            stc
+            rtn
 
 zciofail:
             mov     rb, zcvalid
@@ -212,12 +268,20 @@ zcreq_hi:   dw      0
 zcreq_lo:   dw      0
 zccount:    dw      0
 zcvalid:    dw      0
+zcfail_op:  db      0       ; which kernel call zcmiss was about to
+                            ; attempt (1=seek, 2=read) -- set right
+                            ; before each call, so it still names the
+                            ; right one on a zciofail even though both
+                            ; share that one exit point; see
+                            ; zrun3_main.asm's own zrun3_error, which
+                            ; prints it
             public  zcfcb
             public  zcbuf
             public  zcbase_hi
             public  zcbase_lo
             public  zccount
             public  zcvalid
+            public  zcfail_op
             public  zcreq_hi
             public  zcreq_lo
             endp

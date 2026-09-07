@@ -15,6 +15,7 @@
 #include    include/opcodes.def
 
             extrn   zdi_dict_addr
+            extrn   zdi_dict_guest
             extrn   zdi_entries
             extrn   zdi_entry_length
             extrn   zdi_entry_count
@@ -26,10 +27,23 @@
             extrn   zdict_encode
             extrn   zdict_lookup
 
-; zdict_init: RD = dictionary address. Remembers the dictionary
-; address itself (for zparse.asm's separator-table lookups) and parses
-; the entry length and entry count, remembering where the entries
+; zdict_init: RD = the dictionary's REAL/host address, RF = the same
+; dictionary's GUEST address. Remembers both (the real one for
+; zparse.asm's separator-table lookups and every entry pointer this
+; module hands back; the guest one purely so a caller can map an entry
+; pointer back into the story's own address space), and parses the
+; entry length and entry count, remembering where the entries
 ; themselves start.
+;
+; The two are NOT related by zmem.asm's zmbase: a V3 dictionary lives
+; in static memory, outside the resident dynamic buffer, so
+; zload_story gives it a dedicated buffer of its own (see that file's
+; header). zdispatch.asm's sread used "real - zmbase" to translate the
+; entry addresses it writes into the game's parse buffer, which is
+; only correct when the dictionary happens to sit inside the dynamic
+; buffer -- true of the diagnostics' own fake images, false for every
+; real story file, so ZORK I answered every command with "You used the
+; word ... in a way that I don't understand".
             proc    zdict_init
             mov     r8, rd              ; r8 = dictionary address
             mov     rb, zdi_dict_addr
@@ -37,6 +51,12 @@
             str     rb
             inc     rb
             glo     rd
+            str     rb
+            mov     rb, zdi_dict_guest
+            ghi     rf
+            str     rb
+            inc     rb
+            glo     rf
             str     rb
 
             ldn     r8                  ; d = separator count
@@ -178,7 +198,16 @@ zde_punct_found:
             mov     rd, rb
             sub16   rd, zde_punct_table ; rd = position in the table
             glo     rd
-            adi     7                   ; d = 6 + 1 + position
+            adi     8                   ; d = 6 + 2 + position -- the A2
+                                        ; table's index 0 is z-char 6's
+                                        ; unimplemented ZSCII-escape slot
+                                        ; and index 1 is z-char 7's
+                                        ; newline, so zde_punct_table
+                                        ; (which starts at '0') begins at
+                                        ; index 2 = z-char 8. Was "adi 7",
+                                        ; matching lib/zdec.asm's own
+                                        ; newline-less A2 table; both are
+                                        ; fixed together.
             plo     rd
             ldi     5                   ; shift to A2
             plo     r7
@@ -197,11 +226,26 @@ zde_have_code:
             lbz     zde_check_fit
             inc     rb                  ; shift != 0: one more slot
 zde_check_fit:
-            mov     rf, zde_zchars+6
+            ; BUG FIX: this compared against zde_zchars+6 and stopped on
+            ; "no borrow", i.e. on rb >= zchars+6 -- but rb is the fill
+            ; pointer AFTER this code would be written, so rb ==
+            ; zchars+6 is the case that exactly FILLS the 6-z-char array,
+            ; not one that overflows it. The encoder therefore never
+            ; produced more than 5 z-chars, and every dictionary word
+            ; needing all 6 encoded to the wrong bytes and was never
+            ; found: ZORK I knew "open"/"read"/"north" (4-5 z-chars) but
+            ; answered "I don't know the word" for "mailbox"/"leaflet".
+            ; host/ztext.c's own ztext_encode has this right already
+            ; ("zchar_count + needed > 6"), and diag check 1 missed it by
+            ; comparing two encodings of the same word against each
+            ; other rather than against known bytes.
+            mov     rf, zde_zchars+7
             mov     rc, rb
             sub16   rc, rf
-            lbdf    zde_pack            ; rb >= end: doesn't fit --
-                                        ; stop consuming input here
+            lbdf    zde_pack            ; rb >= zchars+7, i.e. this code
+                                        ; would need a 7th z-char slot:
+                                        ; doesn't fit, stop consuming
+                                        ; input here
             glo     r7
             lbz     zde_write_code
             glo     r7
@@ -408,6 +452,8 @@ zdf_error:
 
             proc    _zdict_data
 zdi_dict_addr:       dw      0
+zdi_dict_guest:      dw      0   ; the same dictionary's guest
+                                 ; address -- see zdict_init
 zdi_entries:         dw      0
 zdi_entry_length:    db      0
 zdi_entry_count:     dw      0
@@ -416,6 +462,7 @@ zde_output:          dw      0
 zdf_scratch:         ds      4
 zde_punct_table:     db      "0123456789.,!?_#'",34,"/",92,"-:()"
                 public  zdi_dict_addr
+                public  zdi_dict_guest
                 public  zdi_entries
                 public  zdi_entry_length
                 public  zdi_entry_count

@@ -33,6 +33,12 @@ ZDICTDIAG_COUNT:        equ     7
 
             proc    zddiag_run
             mov     rd, zt_dict
+            mov     rf, zt_dict              ; guest address == real
+                                        ; address here: this
+                                        ; diagnostic's fake
+                                        ; dictionary is checked
+                                        ; through real pointers
+                                        ; throughout
             call    zdict_init
 
 ; check 0: encoding "cat" produces the exact expected bytes
@@ -65,7 +71,11 @@ zd_fail0:   mov     rb, zt_results+0
 zd_store0:  str     rb
 
 ; check 1: an 8-character word truncates to the same 4 bytes as its
-; own first 6 characters
+; own first 6 characters -- AND to the exact bytes those 6 characters
+; must produce. The exact-bytes half matters: comparing two encodings
+; of the same word against each other alone passed happily while the
+; encoder was silently stopping one z-char early (see zdict_encode's
+; own zde_check_fit fix), since both sides truncated identically.
             mov     rd, zt_alphabet
             mov     rf, zt_encbuf
             ldi     8
@@ -104,6 +114,22 @@ zd_store0:  str     rb
             ldn     r9
             xor
             lbnz    zd_fail1
+
+            ; "alphab" -> z-chars 6,17,21,13,6,7 -> $1a,$35,$b4,$c7
+            mov     r8, zt_encbuf
+            lda     r8
+            xri     $1a
+            lbnz    zd_fail1
+            lda     r8
+            xri     $35
+            lbnz    zd_fail1
+            lda     r8
+            xri     $b4
+            lbnz    zd_fail1
+            ldn     r8
+            xri     $c7
+            lbnz    zd_fail1
+
             mov     rb, zt_results+1
             ldi     0
             lbr     zd_store1

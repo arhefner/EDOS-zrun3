@@ -101,12 +101,27 @@ zd_store_flag:
             mov     rb, zdd_results+11
             call    zd_report
 
+            call    K_INMSG
+            db      "check 12 (mul, div, mod): ",0
+            mov     rb, zdd_results+12
+            call    zd_report
+
+            call    K_INMSG
+            db      "check 13 (print_paddr via zmread's real cache path): ",0
+            mov     rb, zdd_results+13
+            call    zd_report
+
+            call    K_INMSG
+            db      "check 14 (zwide_add_signed bank carry/borrow): ",0
+            mov     rb, zdd_results+14
+            call    zd_report
+
             mov     rf, zd_had_failure
             ldn     rf
             lbnz    zd_some_failed
 
             call    K_INMSG
-            db      "All 12 checks passed.",13,10,0
+            db      "All 15 checks passed.",13,10,0
             ldi     0
             lbr     zd_exit
 

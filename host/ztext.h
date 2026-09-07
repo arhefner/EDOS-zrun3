@@ -6,8 +6,17 @@
 
 typedef int (*ztext_emit_fn)(char character, void *context);
 
+/* `image`/`image_length` are the whole story file (guest address 0
+ * through length), and `abbrev_table` is the header's own abbreviations
+ * field -- needed only to expand a z-char 1-3 abbreviation reference
+ * (looked up as a word at image[abbrev_table + 2*index], itself a
+ * packed address, i.e. that word's own value * 2). An abbreviation's
+ * own text may not reference a further abbreviation (per the Z-machine
+ * standard); a violation of that returns -1, not a second expansion. */
 int ztext_decode(const uint8_t *packed, uint16_t length,
-                 ztext_emit_fn emit, void *context);
+                 ztext_emit_fn emit, void *context,
+                 const uint8_t *image, size_t image_length,
+                 uint16_t abbrev_table);
 
 /* A V3 dictionary word is always 6 z-characters (2 z-words, 4 bytes),
  * padded with the shift-to-A2 filler character if `text` is shorter

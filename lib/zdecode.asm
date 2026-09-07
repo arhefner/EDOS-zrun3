@@ -52,6 +52,7 @@
             extrn   zde_addr
             extrn   zde_instr
             extrn   zde_opidx
+            extrn   zde_fail_addr
 
             extrn   zde_shape_0op_table
             extrn   zde_shape_1op_table
@@ -536,7 +537,13 @@ zdi_error:
 ; advancing the cursor by one. DF=1 if the address is non-resident
 ; (propagated from zmread). Clobbers r8/r9/rb/rf (zmread's own
 ; footprint); rd survives (zmread doesn't modify its address
-; argument), and neither does d (inc doesn't touch it).
+; argument), and neither does d (inc doesn't touch it). This depended
+; on a real fix in zmread's own cache-fallback path (lib/zmem.asm):
+; it used to clobber rd there (reusing it to hold zcread's high-word
+; argument) while resident reads left it alone, so any fetch that
+; happened to land in cache-backed memory would silently corrupt this
+; cursor instead of just advancing it -- never caught because every
+; existing diag uses a fully-resident zminit region.
             proc    zde_read_byte
             call    zmread
             lbdf    zrb_fail
@@ -544,6 +551,15 @@ zdi_error:
             clc
             rtn
 zrb_fail:
+            mov     rb, zde_fail_addr
+            ghi     rd
+            str     rb
+            inc     rb
+            glo     rd
+            str     rb                  ; zde_fail_addr = rd (the exact
+                                        ; cursor address the failing
+                                        ; zmread call was given -- rd is
+                                        ; NOT advanced on this path)
             stc
             rtn
             endp
@@ -623,9 +639,17 @@ zrw_fail:
 zde_addr:       dw      0
 zde_instr:      dw      0
 zde_opidx:      db      0
+zde_fail_addr:  dw      0       ; the exact cursor address zde_read_byte
+                                ; was reading when it hit a zmread
+                                ; failure -- may be past zde_addr, since
+                                ; decode can fail partway through an
+                                ; otherwise-valid instruction (operand,
+                                ; store, branch, or inline-text byte);
+                                ; see this file's own zde_read_byte
                 public  zde_addr
                 public  zde_instr
                 public  zde_opidx
+                public  zde_fail_addr
             endp
 
 ; Packed one byte per opcode: bit 0 = stores a result, bit 1 =

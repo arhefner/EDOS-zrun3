@@ -19,3 +19,10 @@
 /diag/zdecodediag
 /diag/zvardiag
 /diag/zdispatchdiag
+/diag/zmcachediag
+/diag/zheaderdiag
+/zrun3
+/zrun3.lkb
+/zrun3_main.build
+/zrun3_main.lst
+/zrun3_main.prg

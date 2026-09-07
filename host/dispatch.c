@@ -39,6 +39,9 @@ static int do_branch(struct vm_context *ctx, const struct instruction *instr,
     return VM_OK;
 }
 
+static int store_result(struct vm_context *ctx, uint8_t variable,
+                        uint16_t value);
+
 static int do_call(struct vm_context *ctx, const uint16_t *operand,
                    uint8_t operand_count, uint8_t store_variable,
                    uint16_t return_pc)
@@ -49,9 +52,20 @@ static int do_call(struct vm_context *ctx, const uint16_t *operand,
     int i;
 
     if (operand_count == 0) {
-        return VM_ERROR;            /* "call 0" (returns false without
-                                     * a real call) isn't implemented
-                                     * in this proof-of-concept slice */
+        return VM_ERROR;            /* a "call" with no operands at all
+                                     * is a malformed instruction, not
+                                     * the standard's "call 0" below */
+    }
+    if (operand[0] == 0) {
+        /* Z-Machine Standard 6.4.3: calling packed address 0 is legal
+         * and does nothing at all -- no frame, no jump -- it just
+         * stores false. Real V3 story files rely on this: an object
+         * whose "action routine" property is absent falls back to a
+         * property default of 0, and the game calls it unconditionally
+         * (ZORK I does exactly this while listing the objects in a
+         * room). Treating it as an error instead sent the interpreter
+         * off to execute the story header as if it were a routine. */
+        return store_result(ctx, store_variable, 0);
     }
     routine_addr = (uint16_t)(operand[0] * 2);     /* V3 packing */
 
@@ -136,7 +150,9 @@ static int print_ztext_at(struct vm_context *ctx, uint16_t addr)
     }
     remaining = (uint16_t)((ctx->memory->length - addr) & ~1u);
     return ztext_decode(ctx->memory->image + addr, remaining,
-                        vm_emit_wrapper, ctx) == 0 ? VM_OK : VM_ERROR;
+                        vm_emit_wrapper, ctx, ctx->memory->image,
+                        ctx->memory->length, ctx->abbrev_table) == 0 ?
+        VM_OK : VM_ERROR;
 }
 
 static int emit_decimal(struct vm_context *ctx, int16_t value)
@@ -452,7 +468,9 @@ static int step_1op(struct vm_context *ctx, const struct instruction *instr,
                 return VM_ERROR;
             }
             return ztext_decode(ctx->memory->image + addr, length,
-                vm_emit_wrapper, ctx) == 0 ? VM_OK : VM_ERROR;
+                vm_emit_wrapper, ctx, ctx->memory->image,
+                ctx->memory->length, ctx->abbrev_table) == 0 ?
+                VM_OK : VM_ERROR;
         }
     case 11:                    /* ret */
         return do_return(ctx, operand[0]);
@@ -496,12 +514,14 @@ static int step_0op(struct vm_context *ctx, const struct instruction *instr)
                                  * decode already measured it */
         return ztext_decode(ctx->memory->image + instr->addr + 1,
             (uint16_t)(instr->length - 1), vm_emit_wrapper,
-            ctx) == 0 ? VM_OK : VM_ERROR;
+            ctx, ctx->memory->image, ctx->memory->length,
+            ctx->abbrev_table) == 0 ? VM_OK : VM_ERROR;
     case 3:                     /* print_ret: print, then a newline,
                                  * then return true */
         if (ztext_decode(ctx->memory->image + instr->addr + 1,
                          (uint16_t)(instr->length - 1), vm_emit_wrapper,
-                         ctx) != 0 ||
+                         ctx, ctx->memory->image, ctx->memory->length,
+                         ctx->abbrev_table) != 0 ||
             vm_emit(ctx, '\n') != 0) {
             return VM_ERROR;
         }

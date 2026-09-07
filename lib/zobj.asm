@@ -26,6 +26,7 @@
 #include    include/opcodes.def
 
             extrn   zobase
+            extrn   zodynbase
 
             extrn   zobj_entry
             extrn   zobj_get_parent
@@ -43,13 +44,31 @@
 OBJ_ENTRY_SIZE:         equ     9
 OBJ_PROP_DEFAULTS_SIZE: equ     62
 
-; zobj_init: RD = object table address.
+; zobj_init: RD = object table address (a REAL/host address -- the
+; object table always lives in dynamic memory, so it is physically
+; inside the resident story buffer), RF = the host address that guest
+; address 0 maps to (i.e. that same resident buffer's own base).
+;
+; RF is needed because an object entry's property-table field holds a
+; GUEST address, unlike every other address this module deals in --
+; see zobj_prop_table_addr below for the bug that not translating it
+; caused. A caller whose guest space and host space genuinely coincide
+; (every bare-metal diag in this project, which builds its fake object
+; table at whatever address its own scratch buffer happens to sit at
+; and stores guest offsets relative to that) passes that same buffer
+; base here, exactly as zload_story passes the real story's own.
             proc    zobj_init
             mov     rb, zobase
             ghi     rd
             str     rb
             inc     rb
             glo     rd
+            str     rb
+            mov     rb, zodynbase
+            ghi     rf
+            str     rb
+            inc     rb
+            glo     rf
             str     rb
             clc
             rtn
@@ -335,8 +354,20 @@ zor_corrupt:
             rtn
             endp
 
-; zobj_prop_table_addr: RD = object. Returns RF = property table
-; address.
+; zobj_prop_table_addr: RD = object. Returns RF = the property table's
+; REAL/host address.
+;
+; BUG FIX: the entry's property-table field is the one GUEST address
+; stored anywhere in the object table -- everything else this module
+; and zprop.asm handle (zobase, entry addresses, the short-name
+; pointer, property data pointers) is already a real host address, and
+; zdispatch.asm's own get_prop_addr translates back to guest with
+; zmbase precisely because of that. This routine used to return the
+; stored field verbatim, so zobj_short_name/zprop_* then read the
+; property table from whatever host RAM happened to live at the guest
+; address -- for ZORK I, print_obj on "West of House" (property table
+; at guest $1C1E) decoded kernel memory at real $1C1E instead and
+; printed "You're sghzyS". Adding zodynbase is the whole fix.
             proc    zobj_prop_table_addr
             call    zobj_entry
             add16   rf, 7
@@ -344,7 +375,13 @@ zor_corrupt:
             phi     r8
             ldn     rf
             plo     r8
-            mov     rf, r8
+            mov     rf, r8              ; rf = the stored GUEST address
+            mov     rd, zodynbase       ; rd is already clobbered by
+            lda     rd                  ; zobj_entry above, so it is
+            phi     r8                  ; free scratch here
+            ldn     rd
+            plo     r8                  ; r8 = host base of guest 0
+            add16   rf, r8              ; rf = the real host address
             clc
             rtn
             endp
@@ -365,7 +402,12 @@ zor_corrupt:
 
             proc    _zobj_data
 zobase:             dw      0
+zodynbase:          dw      0       ; host address of guest address 0,
+                                    ; from zobj_init's own RF -- used
+                                    ; only to translate an object
+                                    ; entry's property-table field
 zoi_destination:    db      0
                 public  zobase
+                public  zodynbase
                 public  zoi_destination
             endp

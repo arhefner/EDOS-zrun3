@@ -26,6 +26,18 @@ ZPDIAG_COUNT:   equ     7
 ; check (0 = pass, 1 = fail), in the order described below.
             proc    zpdiag_run
             mov     rd, zp_table
+            mov     rf, zp_table                ; zobj_init's own
+                                        ; second argument: the
+                                        ; host address guest 0
+                                        ; maps to. This fake
+                                        ; image's object table
+                                        ; IS at guest 0, so the
+                                        ; two coincide -- and
+                                        ; the proptable fields
+                                        ; below are therefore
+                                        ; plain guest offsets,
+                                        ; exactly as a real
+                                        ; story file stores them
             call    zobj_init
 
 ; check 0: property 5 on object 1 has length 1 and a real address
@@ -199,19 +211,19 @@ zp_table:
                 db      0
                 db      0
                 db      2
-                dw      zp_table+100
+                dw      100
 ; object 2: parent = 1, sibling = 3, property table @ zp_table+110
                 db      0,0,0,0
                 db      1
                 db      3
                 db      0
-                dw      zp_table+110
+                dw      110
 ; object 3: parent = 1, property table @ zp_table+115
                 db      0,0,0,0
                 db      1
                 db      0
                 db      0
-                dw      zp_table+115
+                dw      115
                 ds      11                            ; pad to offset 100
 
 ; object 1's property table: 1-word short name, then property 5

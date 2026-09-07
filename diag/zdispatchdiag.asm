@@ -39,21 +39,32 @@
 ;
 ; Touches no ELF-DOS kernel or BIOS entry points (this file's own
 ; zdisp_emit_string test double included -- see check 3's own header
-; comment for why the real K_MSG-backed one isn't used here).
+; comment for why the real K_MSG-backed one isn't used here) -- with
+; one deliberate exception: check 13 (see its own header comment)
+; genuinely needs the real kernel filesystem, the same way
+; diag/zmcachediag.asm does and for the same reason (zmread's cache
+; path requires a real, open FCB; a fake one would recreate the wild-
+; pointer hazard the zcfcb==0 guard exists to prevent).
 ;
 
 #include    include/opcodes.def
 #include    include/zdecode.inc
+#include    include/bios.inc
+#include    include/kernel_api.inc
 
             extrn   zminit
             extrn   zstack_init
             extrn   zvar_init
             extrn   zobj_init
+            extrn   zcinit
             extrn   zmbase
             extrn   zmend
             extrn   zdisp_step
+            extrn   zwide_add_signed
+            extrn   zdict_init
 
             extrn   zdisp_pc
+            extrn   zdisp_pc_bank
             extrn   zdisp_quit
             extrn   zv_globals_base
             extrn   zsbase
@@ -100,12 +111,23 @@
             extrn   zdd_mem11
             extrn   zdd_stack11
             extrn   zdd_frames11
+            extrn   zdd_mem12
+            extrn   zdd_stack12
+            extrn   zdd_frames12
+            extrn   zdd_mem13
+            extrn   zdd_stack13
+            extrn   zdd_frames13
+            extrn   zdd13_fcb
+            extrn   zdd13_iobuf
+            extrn   zdd13_cache_buf
+            extrn   zdd13_path
+            extrn   zdd13_filedata
             extrn   zdd_captured_text
             extrn   zdd_capture_cursor
             extrn   zdd_canned_input
             extrn   zdd_results
 
-ZDDIAG_COUNT:   equ     12
+ZDDIAG_COUNT:   equ     15
 
 ; zddiag_run: no arguments. Returns RF = number of failed checks,
 ; DF=1 if RF != 0. zdd_results[0..ZDDIAG_COUNT-1] holds one byte per
@@ -121,7 +143,7 @@ ZDDIAG_COUNT:   equ     12
             call    zstack_init
             mov     rd, 0
             mov     rf, zdd_frames0
-            mov     rc, zdd_frames0+72      ; room for 2 frames
+            mov     rc, zdd_frames0+74      ; room for 2 frames
             call    zvar_init
 
             mov     rf, zdd_mem0
@@ -240,7 +262,7 @@ zv_store0:  str     rb
             call    zstack_init
             mov     rd, 0
             mov     rf, zdd_frames1
-            mov     rc, zdd_frames1+36
+            mov     rc, zdd_frames1+37
             call    zvar_init
 
             mov     rf, zdd_mem1
@@ -390,7 +412,7 @@ zv_store1:  str     rb
             call    zstack_init
             mov     rd, 0
             mov     rf, zdd_frames2
-            mov     rc, zdd_frames2+36
+            mov     rc, zdd_frames2+37
             call    zvar_init
 
             mov     rf, zdd_mem2
@@ -540,7 +562,7 @@ zv_store2:  str     rb
             call    zstack_init
             mov     rd, 0
             mov     rf, zdd_frames3
-            mov     rc, zdd_frames3+36
+            mov     rc, zdd_frames3+37
             call    zvar_init
 
             mov     r8, zdd_captured_text
@@ -732,7 +754,7 @@ zv_store3:  str     rb
                                             ; the object table (0-118)
                                             ; and the program bytes
             mov     rf, zdd_frames4
-            mov     rc, zdd_frames4+36
+            mov     rc, zdd_frames4+37
             call    zvar_init
 
             mov     r8, zmbase
@@ -743,6 +765,11 @@ zv_store3:  str     rb
                                             ; address of guest 0, which
                                             ; is where this check's own
                                             ; object table starts
+            mov     rf, r9              ; rf = zobj_init's own second
+                                        ; argument: the host address
+                                        ; guest 0 maps to (== zmbase,
+                                        ; which is also where this
+                                        ; check's object table starts)
             mov     rd, r9
             call    zobj_init
 
@@ -767,17 +794,15 @@ zc4_zero_loop:
             ldi     $22
             str     rf
 
-; obj1/obj2/obj3's own proptable_addr entry fields hold REAL/host
-; addresses, not guest-relative offsets -- zobj_prop_table_addr
-; returns the entry's stored field value as-is, with no translation
-; (matching diag/zpropdiag.asm's own test table, which stores
-; `dw zp_table+100` rather than a raw offset), so each is computed at
-; runtime from zdd_mem4 here rather than written as a literal offset.
-            mov     r9, zdd_mem4
-            add16   r9, $64         ; r9 = real addr of obj1's proptable
+; obj1/obj2/obj3's own proptable_addr entry fields hold GUEST addresses,
+; exactly as a real story file stores them -- zobj_prop_table_addr adds
+; zobj_init's own base (zmbase here) to translate. They used to be
+; written as REAL/host addresses to match that routine's old, buggy
+; no-translation behaviour; see lib/zobj.asm's own fix note.
+            mov     r9, $64         ; r9 = real addr of obj1's proptable
                                     ; (guest offset 100)
             mov     rf, zdd_mem4
-            add16   rf, $44         ; obj1: child=2, proptable (real)
+            add16   rf, $44         ; obj1: child=2, proptable (guest)
             ldi     $02
             str     rf
             inc     rf
@@ -1168,7 +1193,7 @@ zv_store4:  str     rb
                                             ; the object table (0-118)
                                             ; and the program bytes
             mov     rf, zdd_frames5
-            mov     rc, zdd_frames5+36
+            mov     rc, zdd_frames5+37
             call    zvar_init
 
             mov     r8, zmbase
@@ -1179,6 +1204,11 @@ zv_store4:  str     rb
                                             ; address of guest 0, which
                                             ; is where this check's own
                                             ; object table starts
+            mov     rf, r9              ; rf = zobj_init's own second
+                                        ; argument: the host address
+                                        ; guest 0 maps to (== zmbase,
+                                        ; which is also where this
+                                        ; check's object table starts)
             mov     rd, r9
             call    zobj_init
 
@@ -1203,14 +1233,12 @@ zc5_zero_loop:
             ldi     $22
             str     rf
 
-; see check 4's own note: proptable_addr fields hold REAL/host
-; addresses (zobj_prop_table_addr returns the stored field value
-; as-is, no translation), computed at runtime from zdd_mem5 here.
-            mov     r9, zdd_mem5
-            add16   r9, $64         ; r9 = real addr of obj1's proptable
+; see check 4's own note: proptable_addr fields hold GUEST addresses,
+; which zobj_prop_table_addr translates through zobj_init's own base.
+            mov     r9, $64         ; r9 = real addr of obj1's proptable
                                     ; (guest offset 100)
             mov     rf, zdd_mem5
-            add16   rf, $44         ; obj1: child=2, proptable (real)
+            add16   rf, $44         ; obj1: child=2, proptable (guest)
             ldi     $02
             str     rf
             inc     rf
@@ -1605,7 +1633,7 @@ zv_store5:  str     rb
             call    zstack_init
             mov     rd, $00e0
             mov     rf, zdd_frames6
-            mov     rc, zdd_frames6+36
+            mov     rc, zdd_frames6+37
             call    zvar_init
 
             mov     r8, zmbase
@@ -1613,6 +1641,11 @@ zv_store5:  str     rb
             phi     r9
             ldn     r8
             plo     r9
+            mov     rf, r9              ; rf = zobj_init's own second
+                                        ; argument: the host address
+                                        ; guest 0 maps to (== zmbase,
+                                        ; which is also where this
+                                        ; check's object table starts)
             mov     rd, r9
             call    zobj_init
 
@@ -2210,7 +2243,7 @@ zv_store6:  str     rb
             call    zstack_init
             mov     rd, $00e0
             mov     rf, zdd_frames7
-            mov     rc, zdd_frames7+36
+            mov     rc, zdd_frames7+37
             call    zvar_init
 
             mov     r8, zmbase
@@ -2218,6 +2251,11 @@ zv_store6:  str     rb
             phi     r9
             ldn     r8
             plo     r9
+            mov     rf, r9              ; rf = zobj_init's own second
+                                        ; argument: the host address
+                                        ; guest 0 maps to (== zmbase,
+                                        ; which is also where this
+                                        ; check's object table starts)
             mov     rd, r9
             call    zobj_init
 
@@ -2234,10 +2272,9 @@ zc7_zero_loop:
             lbnz    zc7_zero_loop
 
 ; ---- check 7: object table (object1 has prop5 len1=0x11, prop3 len2=0x2233, proptable @ guest $60) ----
-            mov     r9, zdd_mem7
-            add16   r9, $60         ; r9 = real addr of obj1's proptable
+            mov     r9, $60         ; r9 = real addr of obj1's proptable
             mov     rf, zdd_mem7
-            add16   rf, $44         ; obj1 entry offset68: child=0(unused), proptable (real) at +1,+2
+            add16   rf, $44         ; obj1 entry offset68: child=0(unused), proptable (guest) at +1,+2
             ldi     $00
             str     rf
             inc     rf
@@ -2684,7 +2721,7 @@ zv_store7:  str     rb
             call    zstack_init
             mov     rd, $00e0
             mov     rf, zdd_frames8
-            mov     rc, zdd_frames8+72      ; room for 2 frames (the
+            mov     rc, zdd_frames8+74      ; room for 2 frames (the
                                             ; routine call below nests
                                             ; one)
             call    zvar_init
@@ -2694,6 +2731,11 @@ zv_store7:  str     rb
             phi     r9
             ldn     r8
             plo     r9
+            mov     rf, r9              ; rf = zobj_init's own second
+                                        ; argument: the host address
+                                        ; guest 0 maps to (== zmbase,
+                                        ; which is also where this
+                                        ; check's object table starts)
             mov     rd, r9
             call    zobj_init
 
@@ -2719,10 +2761,9 @@ zc8_zero_loop:
                                             ; zdd_captured_text (reset)
 
 ; ---- check 8: object table (object1 short name = "hello", proptable @ guest $50, no properties) ----
-            mov     r9, zdd_mem8
-            add16   r9, $50         ; r9 = real addr of obj1's proptable
+            mov     r9, $50         ; r9 = real addr of obj1's proptable
             mov     rf, zdd_mem8
-            add16   rf, $44         ; obj1 entry offset68: child=0(unused), proptable (real) at +1,+2
+            add16   rf, $44         ; obj1 entry offset68: child=0(unused), proptable (guest) at +1,+2
             ldi     $00
             str     rf
             inc     rf
@@ -3275,7 +3316,7 @@ zv_store8:  str     rb
             call    zstack_init
             mov     rd, $00e0
             mov     rf, zdd_frames9
-            mov     rc, zdd_frames9+36
+            mov     rc, zdd_frames9+37
             call    zvar_init
 
             mov     r8, zmbase
@@ -3283,6 +3324,11 @@ zv_store8:  str     rb
             phi     r9
             ldn     r8
             plo     r9
+            mov     rf, r9              ; rf = zobj_init's own second
+                                        ; argument: the host address
+                                        ; guest 0 maps to (== zmbase,
+                                        ; which is also where this
+                                        ; check's object table starts)
             mov     rd, r9
             call    zobj_init
 
@@ -3387,6 +3433,17 @@ zc9_zero_loop:
             inc     rf
             ldi     $33
             str     rf
+
+; ---- check 9: zdict_init, called directly here now that zds_sread no
+; longer re-derives the dictionary's address itself every call (see
+; zds_sread's own updated header comment in lib/zdispatch.asm) -- a
+; real story loader calls this once too, so this mirrors that ----
+            mov     rd, zdd_mem9
+            add16   rd, $30
+            mov     rf, $30             ; the same dictionary's GUEST
+                                        ; address (this check's own
+                                        ; image starts at zdd_mem9)
+            call    zdict_init
 
 ; ---- check 9: text buffer (max_length=20 @ guest $60) and parse buffer (max_words=4 @ guest $80) headers ----
             mov     rf, zdd_mem9
@@ -3639,7 +3696,7 @@ zv_store9:  str     rb
             call    zstack_init
             mov     rd, 0
             mov     rf, zdd_frames10
-            mov     rc, zdd_frames10+36
+            mov     rc, zdd_frames10+37
             call    zvar_init
 
 ; ---- check 10: program bytes ----
@@ -3795,7 +3852,7 @@ zv_store10: str     rb
             call    zstack_init
             mov     rd, $00e0
             mov     rf, zdd_frames11
-            mov     rc, zdd_frames11+36
+            mov     rc, zdd_frames11+37
             call    zvar_init
 
             mov     rf, zdd_mem11
@@ -4034,6 +4091,446 @@ zc11_zero_loop:
 zv_fail11:  mov     rb, zdd_results+11
             ldi     1
 zv_store11: str     rb
+
+; ---- check 12: mul, div, mod (2OP 22/23/24) -- exercises the new
+; unsigned shift-add multiply (truncated to the low 16 bits, correct
+; whether the bits are read as signed or unsigned) and the new signed
+; div/mod pair built on zdisp_sdivmod16/zdisp_udivmod16 (truncating
+; toward zero, remainder takes the dividend's sign), including a
+; divide-by-zero failure. Long-form 2OP operands can't encode a
+; negative literal directly (only small-constant/variable types), so
+; push(-17) [a true VAR opcode, which does support a large-constant
+; operand type -- same $3f types-byte already proven by check 8's own
+; print_num(-42)] followed by store(18, pop) moves -17 into a stable
+; global first. ----
+; ---- check 12: setup ----
+            mov     rd, zdd_mem12
+            mov     rf, 256
+            call    zminit
+            mov     rd, zdd_stack12
+            mov     rf, zdd_stack12+16
+            call    zstack_init
+            mov     rd, 0
+            mov     rf, zdd_frames12
+            mov     rc, zdd_frames12+37
+            call    zvar_init
+            mov     rf, zdisp_quit
+            ldi     0
+            str     rf
+
+; ---- check 12: program bytes ----
+            mov     rf, zdd_mem12
+            add16   rf, $80
+            ldi     $e8                     ; push(-17)
+            str     rf
+            inc     rf
+            ldi     $3f
+            str     rf
+            inc     rf
+            ldi     $ff
+            str     rf
+            inc     rf
+            ldi     $ef
+            str     rf
+            inc     rf
+            ldi     $2d                     ; store 18,(pop) ->
+            str     rf                      ; global18 = -17
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $16                     ; mul 6,7 -> global16
+            str     rf
+            inc     rf
+            ldi     $06
+            str     rf
+            inc     rf
+            ldi     $07
+            str     rf
+            inc     rf
+            ldi     $10
+            str     rf
+            inc     rf
+            ldi     $57                     ; div global18,5 -> global17
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $11
+            str     rf
+            inc     rf
+            ldi     $58                     ; mod global18,5 -> global19
+            str     rf
+            inc     rf
+            ldi     $12
+            str     rf
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $13
+            str     rf
+            inc     rf
+            ldi     $17                     ; div 5,0 -> global20
+            str     rf                      ; [expect DF=1]
+            inc     rf
+            ldi     $05
+            str     rf
+            inc     rf
+            ldi     $00
+            str     rf
+            inc     rf
+            ldi     $14
+            str     rf
+            inc     rf
+            ldi     $ba                     ; quit
+            str     rf
+
+            mov     rf, zdisp_pc
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     $80
+            str     rf
+
+; ---- check 12: steps ----
+            call    zdisp_step              ; push(-17) -> pc=$84
+            lbdf    zv_fail12
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $84
+            lbnz    zv_fail12
+
+            call    zdisp_step              ; store 18,(pop) -> pc=$87
+            lbdf    zv_fail12
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $87
+            lbnz    zv_fail12
+
+            call    zdisp_step              ; mul 6,7 -> pc=$8b
+            lbdf    zv_fail12
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $8b
+            lbnz    zv_fail12
+
+            call    zdisp_step              ; div global18,5 -> pc=$8f
+            lbdf    zv_fail12
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $8f
+            lbnz    zv_fail12
+
+            call    zdisp_step              ; mod global18,5 -> pc=$93
+            lbdf    zv_fail12
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $93
+            lbnz    zv_fail12
+
+            call    zdisp_step              ; div 5,0 -> pc=$97
+            lbnf    zv_fail12               ; [expect DF=1]
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $97
+            lbnz    zv_fail12
+
+            call    zdisp_step              ; quit -> pc=$98
+            lbdf    zv_fail12
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail12
+            ldn     rf
+            xri     $98
+            lbnz    zv_fail12
+
+; ---- check 12: results ----
+            mov     rf, zdd_mem12           ; global16 == 42 (6*7)
+            ldn     rf
+            lbnz    zv_fail12
+            mov     rf, zdd_mem12+1
+            ldn     rf
+            xri     42
+            lbnz    zv_fail12
+
+            mov     rf, zdd_mem12+2         ; global17 == -3 (-17/5,
+            ldn     rf                      ; truncated toward zero)
+            xri     $ff
+            lbnz    zv_fail12
+            mov     rf, zdd_mem12+3
+            ldn     rf
+            xri     $fd
+            lbnz    zv_fail12
+
+            mov     rf, zdd_mem12+6         ; global19 == -2 (-17 mod 5,
+            ldn     rf                      ; sign of the dividend)
+            xri     $ff
+            lbnz    zv_fail12
+            mov     rf, zdd_mem12+7
+            ldn     rf
+            xri     $fe
+            lbnz    zv_fail12
+
+            mov     rf, zdd_mem12+8         ; global20 == 0 (divide by
+            ldn     rf                      ; zero must not store)
+            lbnz    zv_fail12
+            mov     rf, zdd_mem12+9
+            ldn     rf
+            lbnz    zv_fail12
+
+            mov     rb, zdd_results+12
+            ldi     0
+            lbr     zv_store12
+zv_fail12:  mov     rb, zdd_results+12
+            ldi     1
+zv_store12: str     rb
+
+; ---- check 13: print_paddr against a packed string beyond the
+; resident window -- exercises the fixed print pipeline (zdisp_
+; print_at -> zdisp_fetch_guest_bytes -> zmread's real cache path),
+; the same kind of real-file setup as diag/zmcachediag.asm and for the
+; same reason (see this file's own header note above and
+; zmcachediag.asm's own header for why a fake FCB can't stand in for a
+; real one here). The resident dynamic region is deliberately tiny (8
+; bytes) so print_paddr(4) -- guest address 4*2=8 -- lands exactly on
+; the first cache-backed byte. The packed text itself ($35,$51,$c6,
+; $85) is reused verbatim from check 8's own "hello" blob, already
+; hardware-verified to decode correctly there. ----
+; ---- check 13: setup ----
+            mov     rd, zdd_mem13
+            mov     rf, 8
+            call    zminit              ; dynamic guest addresses 0..7
+                                        ; resident; 8+ falls through to
+                                        ; the cache
+            mov     rd, zdd_stack13
+            mov     rf, zdd_stack13+16
+            call    zstack_init
+            mov     rd, 0
+            mov     rf, zdd_frames13
+            mov     rc, zdd_frames13+37
+            call    zvar_init
+
+; ---- check 13: create/truncate the scratch file and write its known
+; content (8 padding bytes for the unused resident-address range, then
+; the "hello" blob at file offset 8) ----
+            mov     rf, zdd13_path
+            mov     rd, zdd13_fcb
+            mov     ra, zdd13_iobuf
+            ldi     1                   ; mode 1: create/overwrite
+            call    K_FILE_OPEN
+            lbdf    zv_fail13_bare      ; nothing created yet
+
+            mov     rf, zdd13_filedata
+            mov     rd, zdd13_fcb
+            ldi     0
+            phi     rc
+            ldi     12
+            plo     rc
+            call    K_FILE_WRITE
+            lbdf    zv_fail13_cleanup
+
+            mov     rd, zdd13_fcb
+            call    K_FILE_CLOSE
+            lbdf    zv_fail13_cleanup
+
+; ---- check 13: reopen read-only and hand the FCB to zcinit ----
+            mov     rf, zdd13_path
+            mov     rd, zdd13_fcb
+            mov     ra, zdd13_iobuf
+            ldi     0                   ; mode 0: read
+            call    K_FILE_OPEN
+            lbdf    zv_fail13_cleanup
+
+            mov     rd, zdd13_fcb
+            mov     rf, zdd13_cache_buf
+            call    zcinit
+
+; ---- check 13: reset the capture buffer ----
+            mov     r8, zdd_captured_text
+            mov     rf, zdd_capture_cursor
+            ghi     r8
+            str     rf
+            inc     rf
+            glo     r8
+            str     rf
+
+; ---- check 13: program bytes (print_paddr(4), quit) ----
+            mov     rf, zdd_mem13
+            ldi     $9d                     ; print_paddr(4)
+            str     rf
+            inc     rf
+            ldi     4
+            str     rf
+            inc     rf
+            ldi     $ba                     ; quit
+            str     rf
+
+            mov     rf, zdisp_pc
+            ldi     0
+            str     rf
+            inc     rf
+            ldi     0
+            str     rf
+            mov     rf, zdisp_quit
+            ldi     0
+            str     rf
+
+; ---- check 13: steps ----
+            call    zdisp_step              ; print_paddr(4) -> pc=$02
+            lbdf    zv_fail13_cleanup
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail13_cleanup
+            ldn     rf
+            xri     2
+            lbnz    zv_fail13_cleanup
+
+            call    zdisp_step              ; quit -> pc=$03
+            lbdf    zv_fail13_cleanup
+            mov     rf, zdisp_pc
+            lda     rf
+            lbnz    zv_fail13_cleanup
+            ldn     rf
+            xri     3
+            lbnz    zv_fail13_cleanup
+
+; ---- check 13: captured output == "hello" ----
+            mov     rf, zdd_captured_text
+            ldn     rf
+            xri     'h'
+            lbnz    zv_fail13_cleanup
+            mov     rf, zdd_captured_text+1
+            ldn     rf
+            xri     'e'
+            lbnz    zv_fail13_cleanup
+            mov     rf, zdd_captured_text+2
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail13_cleanup
+            mov     rf, zdd_captured_text+3
+            ldn     rf
+            xri     'l'
+            lbnz    zv_fail13_cleanup
+            mov     rf, zdd_captured_text+4
+            ldn     rf
+            xri     'o'
+            lbnz    zv_fail13_cleanup
+            mov     rf, zdd_captured_text+5
+            ldn     rf
+            lbnz    zv_fail13_cleanup       ; NUL terminator
+
+            mov     rd, zdd13_fcb
+            call    K_FILE_CLOSE            ; best-effort; df ignored
+            mov     rf, zdd13_path
+            call    K_FILE_DELETE           ; best-effort; df ignored
+            mov     rb, zdd_results+13
+            ldi     0
+            lbr     zv_store13
+
+zv_fail13_cleanup:
+            mov     rd, zdd13_fcb
+            call    K_FILE_CLOSE            ; best-effort; df ignored
+            mov     rf, zdd13_path
+            call    K_FILE_DELETE           ; best-effort; df ignored
+zv_fail13_bare:
+            mov     rb, zdd_results+13
+            ldi     1
+zv_store13: str     rb
+
+; ---- check 14: zwide_add_signed -- the bank-carrying arithmetic
+; behind every branch/jump/call target and print_paddr's own packed-
+; address unpacking, added so a V3 story file over 64K (most of the
+; sample library) doesn't silently lose its own 17th address bit. Pure
+; computation, no memory involved, but never previously exercised
+; anywhere: every existing check's own test data is small-scale enough
+; that this carrying logic never triggers through them. Four cases:
+; positive delta with and without a carry into the bank, negative
+; delta with and without a borrow out of it. ----
+            mov     rd, 0               ; bank = 0
+            mov     rf, 100             ; offset = 100
+            mov     rc, 50              ; delta = +50
+            call    zwide_add_signed
+            ghi     rd
+            lbnz    zv_fail14           ; bank must stay 0
+            glo     rf
+            xri     150
+            lbnz    zv_fail14
+            ghi     rf
+            lbnz    zv_fail14           ; offset == 150
+
+            mov     rd, 0               ; bank = 0
+            mov     rf, $fff0           ; offset = 0xfff0
+            mov     rc, $20             ; delta = +32 -- crosses 0xffff
+            call    zwide_add_signed
+            glo     rd
+            xri     1
+            lbnz    zv_fail14           ; bank must carry to 1
+            ghi     rd
+            lbnz    zv_fail14
+            glo     rf
+            xri     $10
+            lbnz    zv_fail14
+            ghi     rf
+            lbnz    zv_fail14           ; offset == 0x0010
+
+            mov     rd, 1               ; bank = 1
+            mov     rf, 100             ; offset = 100
+            mov     rc, $ffce           ; delta = -50 (0xffce)
+            call    zwide_add_signed
+            glo     rd
+            xri     1
+            lbnz    zv_fail14           ; bank must stay 1
+            ghi     rd
+            lbnz    zv_fail14
+            glo     rf
+            xri     50
+            lbnz    zv_fail14
+            ghi     rf
+            lbnz    zv_fail14           ; offset == 50
+
+            mov     rd, 1               ; bank = 1
+            mov     rf, 10              ; offset = 10
+            mov     rc, $ffec           ; delta = -20 (0xffec)
+            call    zwide_add_signed
+            glo     rd
+            lbnz    zv_fail14           ; bank must borrow to 0
+            ghi     rd
+            lbnz    zv_fail14
+            glo     rf
+            xri     $f6
+            lbnz    zv_fail14
+            ghi     rf
+            xri     $ff
+            lbnz    zv_fail14           ; offset == 0xfff6 (10-20,
+                                        ; wrapped)
+
+            mov     rb, zdd_results+14
+            ldi     0
+            lbr     zv_store14
+zv_fail14:  mov     rb, zdd_results+14
+            ldi     1
+zv_store14: str     rb
+
 ; tally failures into RF, DF=1 if any
             mov     rb, zdd_results
             ldi     ZDDIAG_COUNT
@@ -4120,6 +4617,18 @@ zdrl_copy_done:
             rtn
             endp
 
+; zstatus_draw (test double, replacing lib/zstatus.asm's real one):
+; a no-op. The real one calls env_getenv (real file I/O) and zterm's
+; print routines (real K_MSG), neither of which fits this bare-metal-
+; testable build -- same reasoning as every other platform hook here.
+; sread's own check (9) doesn't assert anything about status-line
+; output, only about the tokenized parse result, so a no-op costs it
+; nothing.
+            proc    zstatus_draw
+            clc
+            rtn
+            endp
+
 ; zdisp_save_game / zdisp_restore_game (test double, replacing
 ; lib/zdispsave.asm's real K_FILE-backed pair): writes/reads the exact
 ; same self-describing state blob (see lib/zdispsave.asm's own header
@@ -4135,6 +4644,11 @@ zdrl_copy_done:
             ldn     r8
             str     r9
             inc     r9                  ; pc
+
+            mov     r8, zdisp_pc_bank
+            ldn     r8
+            str     r9
+            inc     r9                  ; pc's own bank
 
             mov     r8, zv_globals_base
             lda     r8
@@ -4258,6 +4772,10 @@ zsvc_done:
             lda     r8
             str     r9                  ; pc
 
+            mov     r9, zdisp_pc_bank
+            lda     r8
+            str     r9                  ; pc's own bank
+
             mov     r9, zv_globals_base
             lda     r8
             str     r9
@@ -4360,40 +4878,54 @@ zsvc_done:
             proc    _zdispatchdiag_data
 zdd_mem0:       ds      64
 zdd_stack0:     ds      16
-zdd_frames0:    ds      72                  ; 2 frames * 36 bytes
+zdd_frames0:    ds      74                  ; 2 frames * 37 bytes
 zdd_mem1:       ds      256
 zdd_stack1:     ds      16
-zdd_frames1:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames1:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem2:       ds      64
 zdd_stack2:     ds      16
-zdd_frames2:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames2:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem3:       ds      64
 zdd_stack3:     ds      16
-zdd_frames3:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames3:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem4:       ds      256
 zdd_stack4:     ds      16
-zdd_frames4:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames4:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem5:       ds      256
 zdd_stack5:     ds      16
-zdd_frames5:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames5:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem6:       ds      256
 zdd_stack6:     ds      16
-zdd_frames6:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames6:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem7:       ds      256
 zdd_stack7:     ds      16
-zdd_frames7:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames7:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem8:       ds      256
 zdd_stack8:     ds      16
-zdd_frames8:    ds      72                  ; 2 frames * 36 bytes
+zdd_frames8:    ds      74                  ; 2 frames * 37 bytes
 zdd_mem9:       ds      256
 zdd_stack9:     ds      16
-zdd_frames9:    ds      36                  ; 1 frame * 36 bytes
+zdd_frames9:    ds      37                  ; 1 frame * 37 bytes
 zdd_mem10:      ds      256
 zdd_stack10:    ds      16
-zdd_frames10:   ds      36                  ; 1 frame * 36 bytes
+zdd_frames10:   ds      37                  ; 1 frame * 37 bytes
 zdd_mem11:      ds      256
 zdd_stack11:    ds      16
-zdd_frames11:   ds      36                  ; 1 frame * 36 bytes
+zdd_frames11:   ds      37                  ; 1 frame * 37 bytes
+zdd_mem12:      ds      256
+zdd_stack12:    ds      16
+zdd_frames12:   ds      37                  ; 1 frame * 37 bytes
+zdd_mem13:      ds      8                   ; check 13's resident
+                                            ; region is deliberately
+                                            ; only 8 bytes -- see its
+                                            ; own header comment
+zdd_stack13:    ds      16
+zdd_frames13:   ds      37                  ; 1 frame * 37 bytes
+zdd13_fcb:      ds      FCB_LEN
+zdd13_iobuf:    ds      FCB_IOBUF_LEN
+zdd13_cache_buf: ds     512
+zdd13_path:     db      "ZDDPADDR.TST",0
+zdd13_filedata: db      0,0,0,0,0,0,0,0,$35,$51,$c6,$85
 zdd_captured_text: ds   64
 zdd_capture_cursor: dw  0
 zdd_canned_input: db    "cat dog",0
@@ -4440,6 +4972,17 @@ zdd_results:    ds      ZDDIAG_COUNT
                 public  zdd_mem11
                 public  zdd_stack11
                 public  zdd_frames11
+                public  zdd_mem12
+                public  zdd_stack12
+                public  zdd_frames12
+                public  zdd_mem13
+                public  zdd_stack13
+                public  zdd_frames13
+                public  zdd13_fcb
+                public  zdd13_iobuf
+                public  zdd13_cache_buf
+                public  zdd13_path
+                public  zdd13_filedata
                 public  zdd_captured_text
                 public  zdd_capture_cursor
                 public  zdd_canned_input

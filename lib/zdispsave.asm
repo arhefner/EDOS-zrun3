@@ -12,9 +12,14 @@
 ; the actual format entirely up to the platform. Layout (all
 ; multi-byte fields big-endian, matching this project's own convention
 ; throughout):
-;   pc (2), globals_base (2),
+;   pc (2), pc_bank (1) -- the bank/high-word half of a wide V3 pc, for
+;   a story file over 64K,
+;   globals_base (2),
 ;   eval_stack_length (2) + that many bytes (from *zsbase),
-;   frame_stack_length (2) + that many bytes (from *zv_frame_base),
+;   frame_stack_length (2) + that many bytes (from *zv_frame_base --
+;   this is a raw byte count, not frame-count*FRAME_SIZE, so it needed
+;   no change when FRAME_SIZE itself grew to hold a return address's
+;   own bank),
 ;   rand_state (4, raw),
 ;   dynamic_memory_length (2, == zmend) + that many bytes (from
 ;   *zmbase)
@@ -41,6 +46,7 @@
 #include    include/kernel_api.inc
 
             extrn   zdisp_pc
+            extrn   zdisp_pc_bank
             extrn   zv_globals_base
             extrn   zsbase
             extrn   zsptr
@@ -73,6 +79,19 @@
             ldi     0
             phi     rc
             ldi     2
+            plo     rc
+            call    K_FILE_WRITE
+            lbdf    zsg_fail
+
+            mov     rf, zdisp_pc_bank   ; pc's own bank (scalar, 1
+                                        ; byte) -- a V3 story file over
+                                        ; 64K can have pc pointing
+                                        ; beyond the first 64K at save
+                                        ; time
+            mov     rd, zds_fcb
+            ldi     0
+            phi     rc
+            ldi     1
             plo     rc
             call    K_FILE_WRITE
             lbdf    zsg_fail
@@ -201,7 +220,15 @@
             lbdf    zsg_fail
 
             mov     rd, zds_fcb
-            call    K_FILE_CLOSE
+            call    K_FILE_CLOSE        ; DELIBERATE: the close's own DF
+                                        ; IS this routine's result -- a
+                                        ; save whose close failed did not
+                                        ; fully persist. Unlike K_MSG/
+                                        ; K_TYPE (whose DF is undefined
+                                        ; and must never be passed up --
+                                        ; see lib/zdispemit.asm),
+                                        ; K_FILE_CLOSE documents DF = 0/1
+                                        ; in kernel_api.inc.
             rtn
 
 zsg_fail:
@@ -231,6 +258,15 @@ zsg_fail_noclose:
             ldi     0
             phi     rc
             ldi     2
+            plo     rc
+            call    K_FILE_READ
+            lbdf    zrg_fail
+
+            mov     rf, zdisp_pc_bank
+            mov     rd, zds_fcb
+            ldi     0
+            phi     rc
+            ldi     1
             plo     rc
             call    K_FILE_READ
             lbdf    zrg_fail
@@ -407,7 +443,9 @@ zsg_fail_noclose:
             lbdf    zrg_fail
 
             mov     rd, zds_fcb
-            call    K_FILE_CLOSE
+            call    K_FILE_CLOSE        ; DELIBERATE, same as save's own
+                                        ; close above: K_FILE_CLOSE's DF
+                                        ; is documented and is the result.
             rtn
 
 zrg_fail:

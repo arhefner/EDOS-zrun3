@@ -108,10 +108,12 @@
             extrn   zprop_get_next
             extrn   zprop_put
             extrn   ym_fmt_uint32
-            extrn   zdict_init
             extrn   zparse_init
             extrn   zparse_tokenize
+            extrn   zdi_dict_addr
+            extrn   zdi_dict_guest
             extrn   zdisp_read_line
+            extrn   zstatus_draw
             extrn   zdisp_save_game
             extrn   zdisp_restore_game
 
@@ -121,6 +123,7 @@
             extrn   zdisp_print_inline
             extrn   zdisp_store_and_branch_nonzero
             extrn   zdisp_slt
+            extrn   zwide_add_signed
             extrn   zdisp_print_at
             extrn   zrand_step
             extrn   zrand_shl32
@@ -128,21 +131,30 @@
             extrn   zrand_stash
             extrn   zrand_xor_tmp
             extrn   zdisp_umod16
+            extrn   zdisp_udivmod16
+            extrn   zdisp_sdivmod16
             extrn   zrand_state
             extrn   zrand_tmp
 
             extrn   zdisp_pc
+            extrn   zdisp_pc_bank
             extrn   zdisp_quit
             extrn   zdisp_i
             extrn   zdisp_next_pc
+            extrn   zdisp_next_pc_bank
             extrn   zdisp_value
             extrn   zdisp_value2
             extrn   zdisp_routine_addr
+            extrn   zdisp_routine_addr_hi
             extrn   zdisp_local_count
+            extrn   zdisp_call_scratch
+            extrn   zm_bank
             extrn   zdisp_instr
             extrn   zdisp_operand
             extrn   zdisp_locals
             extrn   zdisp_text_buf
+            extrn   zdisp_packed_buf
+            extrn   zmread_bytes
             extrn   zdisp_newline_buf
             extrn   zdisp_char_buf
             extrn   zdisp_num_buf
@@ -150,15 +162,48 @@
 ; zdisp_step: no arguments (uses zdisp_pc). Returns DF=1 for a decode
 ; error or an opcode this slice doesn't recognize yet.
             proc    zdisp_step
+            ; BUG FIX: both pointers are set up FIRST and the byte
+            ; loaded LAST. "mov r9, zm_bank" ends in "ldi <zm_bank's
+            ; own low address byte> / plo r9" and so CLOBBERS D
+            ; (toolchain gotcha #2) -- with it sitting between the ldn
+            ; and the str, zm_bank was set to the LOW BYTE OF ITS OWN
+            ; ADDRESS rather than to zdisp_pc_bank. zmread then handed
+            ; that byte to zcread as the 32-bit offset's HIGH word, so
+            ; the very first opcode fetch seeked to <garbage>:4F05 --
+            ; the long-parked "K_FILE_SEEK target's high word is
+            ; corrupted for >64K story files" bug. It looked
+            ; layout-sensitive (any edit changed the symptom) because
+            ; the bogus value IS an address low byte, and it never
+            ; reproduced in diag/zseekdiag_main.asm because that
+            ; program's own two zm_bank writes both already load the
+            ; pointer before the byte.
+            mov     r9, zm_bank
+            mov     r8, zdisp_pc_bank
+            ldn     r8
+            str     r9                  ; zm_bank = zdisp_pc_bank, so
+                                        ; this instruction's own fetch
+                                        ; (through zmread, inside
+                                        ; zdecode_instruction) lands in
+                                        ; the right bank for a story
+                                        ; file over 64K
+
             mov     r8, zdisp_pc
             lda     r8
             phi     rd
             ldn     r8
-            plo     rd                  ; rd = current pc
+            plo     rd                  ; rd = current pc (low word)
 
             mov     rf, zdisp_instr
             call    zdecode_instruction
             lbdf    zds_error
+
+            mov     r9, zm_bank         ; reset zm_bank to 0
+            ldi     0                   ; immediately -- every OTHER
+            str     r9                  ; zmread call for the rest of
+                                        ; this opcode's own execution
+                                        ; (globals, properties, operand
+                                        ; reads) is always within the
+                                        ; first 64K and assumes bank 0
 
 ; next_pc = instr.addr + instr.length, both already written by decode
             mov     rf, zdisp_instr+ZDI_ADDR
@@ -171,7 +216,22 @@
             phi     r9
             ldn     rf
             plo     r9                  ; r9 = length
-            add16   r8, r9              ; r8 = next_pc
+            add16   r8, r9              ; r8 = next_pc (low word,
+                                        ; wrapped); DF=1 iff this
+                                        ; overflowed past 0xffff (ADD's
+                                        ; own carry-out, unrelated to
+                                        ; SM/SMB's inverted sense)
+
+            mov     rf, zdisp_pc_bank
+            ldn     rf                  ; d = the current bank
+            lbnf    zds_pc_no_carry     ; DF=0: no overflow, bank
+                                        ; unchanged
+            adi     1                   ; DF=1: this instruction's own
+                                        ; bytes ended exactly at a 64K
+                                        ; boundary -- carry into the
+                                        ; next bank
+zds_pc_no_carry:
+            plo     r9                  ; r9.0 = next_pc's own bank
 
             mov     rf, zdisp_next_pc
             ghi     r8
@@ -179,12 +239,18 @@
             inc     rf
             glo     r8
             str     rf
+            mov     rf, zdisp_next_pc_bank
+            glo     r9
+            str     rf
 
             mov     rf, zdisp_pc        ; commit the default fallthrough
             ghi     r8                  ; now -- every opcode handler
             str     rf                  ; below that branches/calls/
             inc     rf                  ; returns overrides this later
             glo     r8                  ; in the same zdisp_step call
+            str     rf
+            mov     rf, zdisp_pc_bank
+            glo     r9
             str     rf
 
 ; resolve operands: zdisp_operand[i] = operand_types[i]==VARIABLE ?
@@ -386,6 +452,18 @@ zds_2op:
             ldn     rf
             xri     21
             lbz     zds_sub
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     22
+            lbz     zds_mul
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     23
+            lbz     zds_div
+            mov     rf, zdisp_instr+ZDI_OPCODE
+            ldn     rf
+            xri     24
+            lbz     zds_mod
             stc
             rtn
 
@@ -678,6 +756,116 @@ zds_sub:
             plo     ra                  ; ra = operand[1]
             sub16   r9, ra              ; r9 = operand[0] - operand[1]
             mov     rf, r9
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- mul: 16x16->16 unsigned shift-add multiply, truncated to the
+; low 16 bits. Correct for signed Z-machine operands too: two's-
+; complement multiplication truncated to the same width is bit-
+; identical whether the inputs are read as signed or unsigned, so no
+; sign handling is needed here (unlike div/mod below, whose quotient
+; and remainder magnitudes are NOT truncation-invariant) ----
+zds_mul:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (multiplier,
+                                        ; consumed bit-by-bit below)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (multiplicand,
+                                        ; doubled each iteration)
+
+            ldi     0
+            phi     r8
+            plo     r8                  ; r8 = product accumulator
+            ldi     16
+            plo     rb                  ; rb.0 = iteration count
+
+zmul_loop:
+            glo     rb
+            lbz     zmul_done
+
+            glo     r9
+            ani     1
+            lbz     zmul_no_add
+            add16   r8, ra              ; product += multiplicand
+
+zmul_no_add:
+            shl16   ra                  ; multiplicand <<= 1 (bits
+                                        ; shifted past bit15 are
+                                        ; discarded, same as the
+                                        ; product's own add16
+                                        ; wraparound -- only the low 16
+                                        ; bits are ever wanted)
+            shr16   r9                  ; multiplier >>= 1, unsigned
+                                        ; (only its bits are tested,
+                                        ; never its value)
+
+            dec     rb
+            lbr     zmul_loop
+
+zmul_done:
+            mov     rf, r8
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+; ---- div / mod: signed 16-bit, truncating toward zero, remainder
+; takes the dividend's sign (matching the Z-machine spec and C's own
+; convention) -- both delegate to zdisp_sdivmod16, which returns both
+; results from a single division so the sign bookkeeping is written
+; once rather than twice. DF=1 (divide by zero) routes to zds_error
+; exactly like every other opcode failure here ----
+zds_div:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (dividend)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (divisor)
+
+            mov     rd, r9
+            mov     rf, ra
+            call    zdisp_sdivmod16     ; rd = quotient, rc =
+                                        ; remainder, df=1 on /0
+            lbdf    zds_error
+
+            mov     rf, rd
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8
+            call    zvar_write
+            rtn
+
+zds_mod:
+            mov     rf, zdisp_operand
+            lda     rf
+            phi     r9
+            ldn     rf
+            plo     r9                  ; r9 = operand[0] (dividend)
+            mov     rf, zdisp_operand+2
+            lda     rf
+            phi     ra
+            ldn     rf
+            plo     ra                  ; ra = operand[1] (divisor)
+
+            mov     rd, r9
+            mov     rf, ra
+            call    zdisp_sdivmod16     ; rd = quotient, rc =
+                                        ; remainder, df=1 on /0
+            lbdf    zds_error
+
+            mov     rf, rc
             mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
             ldn     r8
             call    zvar_write
@@ -1004,22 +1192,54 @@ zds_jump:
             phi     r9
             ldn     rf
             plo     r9                  ; r9 = length
-            add16   r8, r9              ; r8 = after
+            add16   r8, r9              ; r8 = after (== zdisp_pc's own
+                                        ; current value, already
+                                        ; committed by zdisp_step's own
+                                        ; preamble -- zdisp_pc_bank
+                                        ; there already reflects this
+                                        ; sum's own bank, reused
+                                        ; directly below rather than
+                                        ; recomputed)
 
             mov     rf, zdisp_operand
             lda     rf
             phi     r9
             ldn     rf
             plo     r9                  ; r9 = operand[0] (signed)
-            add16   r8, r9
-            sub16   r8, 2               ; r8 = after + operand[0] - 2
+            sub16   r9, 2               ; r9 = operand[0] - 2 (a small
+                                        ; signed adjustment, always
+                                        ; safely within 16-bit signed
+                                        ; range on its own)
 
-            mov     rf, zdisp_pc
-            ghi     r8
-            str     rf
-            inc     rf
-            glo     r8
-            str     rf
+            mov     rf, zdisp_pc_bank
+            ldn     rf
+            plo     rd
+            ldi     0
+            phi     rd                  ; rd = 0:zdisp_pc_bank ("after"
+                                        ; address's own bank) -- BUG FIX:
+                                        ; the phi/plo were the wrong way
+                                        ; round, making RD $0100 rather
+                                        ; than $0001 for bank 1, so
+                                        ; zwide_add_signed's own result
+                                        ; bank came back with its real
+                                        ; value in the high byte and
+                                        ; "glo rd" then stored 0. Every
+                                        ; taken branch and every jump
+                                        ; inside a routine past 64K
+                                        ; silently dropped back to bank 0
+            mov     rf, r8              ; rf = after's low word
+            mov     rc, r9              ; rc = signed delta
+            call    zwide_add_signed    ; rd:rf = target bank:offset
+
+            mov     r8, zdisp_pc
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_pc = target offset
+            mov     r8, zdisp_pc_bank
+            glo     rd
+            str     r8                  ; zdisp_pc_bank = target bank
             clc
             rtn
 
@@ -1349,32 +1569,31 @@ zdr_draw:
 ; ---- sread: reads a line into the text buffer at operand[0] (byte 0
 ; = max length, characters start at byte 1, V3 has no length byte),
 ; lowercased and NUL-terminated by zdisp_read_line, then tokenizes it
-; into the parse buffer at operand[1] via zdict_init + zparse_init +
-; zparse_tokenize. Both zdict.asm and zparse.asm, like zobj.asm/
-; zprop.asm, operate entirely on REAL addresses with no zmbase
-; translation of their own (confirmed against diag/zdictdiag.asm's own
-; check 6, which asserts zdict_find_word returns zt_dict+12 -- a REAL
-; linked address, not a story-relative one), so the parse buffer's own
-; entry_addr fields (as written by zparse_tokenize) are translated
-; real->guest here, at the dispatch boundary, exactly like
-; get_prop_addr's own translation. No store, no branch (V3's sread has
-; neither). ----
+; into the parse buffer at operand[1] via zparse_init + zparse_tokenize.
+; zdict_init is NOT called here (an earlier version re-derived the
+; dictionary's real address from zmbase + the header's own dictionary
+; field on every single sread call, the same story-header lookup
+; zmread16(8) below still does for a different reason) -- the
+; dictionary normally lives in STATIC memory, past the resident
+; dynamic-memory region a real story loader allocates (see lib/
+; zload.asm's own header comment for why it gets its own dedicated
+; buffer instead of sharing zmbase's), so "zmbase + dictionary offset"
+; only ever pointed at the right bytes when a diag's own test data
+; happened to place the dictionary inside its single resident test
+; buffer (see diag/zdispatchdiag.asm's check 9, which does exactly
+; that and now calls zdict_init directly in its own setup instead).
+; The loader calls zdict_init exactly once, at load time; zdict_lookup/
+; zparse_tokenize already work purely off the zdi_dict_addr global it
+; sets, so nothing here needs to touch it again. Both zdict.asm and
+; zparse.asm, like zobj.asm/zprop.asm, operate entirely on REAL
+; addresses with no zmbase translation of their own (confirmed against
+; diag/zdictdiag.asm's own check 6, which asserts zdict_find_word
+; returns zt_dict+12 -- a REAL linked address, not a story-relative
+; one), so the parse buffer's own entry_addr fields (as written by
+; zparse_tokenize) are translated real->guest here, at the dispatch
+; boundary, exactly like get_prop_addr's own translation. No store, no
+; branch (V3's sread has neither). ----
 zds_sread:
-            mov     rd, 8
-            call    zmread16            ; rf = dictionary guest addr,
-                                        ; df=err
-            lbdf    zds_error
-
-            mov     r8, zmbase
-            lda     r8
-            phi     r9
-            ldn     r8
-            plo     r9                  ; r9 = zmbase
-            add16   rf, r9              ; rf = real dictionary address
-
-            mov     rd, rf
-            call    zdict_init          ; clobbers R7-R9/RB/RF
-
             mov     rf, zdisp_operand
             lda     rf
             phi     r9
@@ -1411,6 +1630,20 @@ zds_sread:
             str     r8                  ; zdisp_value2 = real parse
                                         ; buffer addr
 
+            call    zstatus_draw        ; per the Z-machine standard,
+                                        ; the status line must be
+                                        ; redisplayed whenever the game
+                                        ; reads a line of input -- df
+                                        ; ignored, a status-line hiccup
+                                        ; shouldn't abort the game
+
+            mov     r8, zdisp_value
+            lda     r8
+            phi     r9
+            ldn     r8
+            plo     r9                  ; r9 = real text buffer addr,
+                                        ; reloaded fresh (zstatus_draw
+                                        ; may have clobbered it)
             mov     rd, r9
             call    zdisp_read_line     ; df=1 on abort/error
             lbdf    zds_error
@@ -1460,7 +1693,16 @@ zdsr_have_len:
 
 ; translate each parsed word's entry_addr field from real to guest --
 ; word_count lives at parse_addr+1, entries start at parse_addr+2,
-; 4 bytes each (entry_addr hi/lo, length, position)
+; 4 bytes each (entry_addr hi/lo, length, position).
+;
+; The mapping is the DICTIONARY's own (real -> zdi_dict_addr-relative
+; offset -> zdi_dict_guest), not zmbase's: a V3 dictionary lives in
+; static memory and zload_story gives it a dedicated resident buffer
+; with no zmbase relationship at all. This used "real - zmbase", which
+; only coincides with the right answer when the dictionary sits inside
+; the dynamic buffer -- true of the diagnostics' fake images, false for
+; every real story file, so the game got garbage entry addresses and
+; rejected every command it could otherwise parse.
             mov     r8, zdisp_value2
             lda     r8
             phi     rf
@@ -1479,11 +1721,20 @@ zdsr_have_len:
             plo     r9
             add16   r9, 2               ; r9 = real addr of entry[0]
 
-            mov     r8, zmbase
+            mov     r8, zdi_dict_addr
             lda     r8
             phi     ra
             ldn     r8
-            plo     ra                  ; ra = zmbase
+            plo     ra                  ; ra = the dictionary buffer's
+                                        ; own real base
+            mov     r8, zdi_dict_guest
+            lda     r8
+            phi     r7
+            ldn     r8
+            plo     r7                  ; r7 = that dictionary's guest
+                                        ; address (nothing in the loop
+                                        ; below calls anything, so both
+                                        ; survive it)
 
 zdsr_xlate_loop:
             glo     rb
@@ -1507,7 +1758,8 @@ zdsr_xlate_have:
             lbz     zdsr_xlate_skip     ; absent (0): don't translate
 
 zdsr_xlate_do:
-            sub16   rc, ra              ; rc = real - zmbase = guest
+            sub16   rc, ra              ; rc = offset into the buffer
+            add16   rc, r7              ; rc = the guest address
             mov     rf, r9
             ghi     rc
             str     rf
@@ -1955,42 +2207,58 @@ zds_not:
             rtn
 
 ; ---- print_addr: operand[0] is a guest/story address of packed
-; z-text (not this instruction's own inline text) -- translate to
-; real and decode+emit via zdisp_print_at ----
+; z-text (not this instruction's own inline text) -- decode+emit via
+; zdisp_print_at, which takes a GUEST address (not a real one): the
+; text this points at is ordinary story-file prose, almost always
+; static or high memory, so it must go through zmread's cache-aware
+; path, not zmbase-relative pointer arithmetic that only works for
+; resident bytes ----
 zds_print_addr:
             mov     rf, zdisp_operand
             lda     rf
             phi     r9
             ldn     rf
-            plo     r9                  ; r9 = operand[0] (guest addr)
-
-            mov     r8, zmbase
-            lda     r8
-            phi     ra
-            ldn     r8
-            plo     ra                  ; ra = zmbase
-            add16   r9, ra              ; r9 = real address
+            plo     r9                  ; r9 = operand[0] (guest addr,
+                                        ; always plain 16-bit -- a
+                                        ; direct byte address operand,
+                                        ; never packed, so it can never
+                                        ; exceed 65535 on its own)
 
             mov     rd, r9
+            mov     ra, 0
             call    zdisp_print_at
             rtn
 
 ; ---- print_paddr: operand[0] is a V3 packed address (guest address
-; = operand[0]*2) of packed z-text ----
+; = operand[0]*2) of packed z-text. The doubling can legitimately
+; carry into a 17th bit for a story file over 64K (most of the V3
+; sample library), which a plain shl16 would silently discard -- shl/
+; shlc across both bytes instead, same multi-byte shift-chain idiom
+; used throughout this project, so the bit that falls off bit15 (DF
+; after the chain) becomes the address's own high word rather than
+; vanishing. ----
 zds_print_paddr:
             mov     rf, zdisp_operand
             lda     rf
             phi     r9
             ldn     rf
             plo     r9                  ; r9 = operand[0] (packed addr)
-            shl16   r9                  ; r9 = operand[0]*2 (guest addr)
 
-            mov     r8, zmbase
-            lda     r8
-            phi     ra
-            ldn     r8
-            plo     ra                  ; ra = zmbase
-            add16   r9, ra              ; r9 = real address
+            glo     r9
+            shl
+            plo     r9
+            ghi     r9
+            shlc
+            phi     r9                  ; r9 = operand[0]*2, wrapped to
+                                        ; 16 bits; DF = the 17th bit
+            ldi     0
+            plo     ra
+            lbnf    zpp_no_carry
+            ldi     1
+            plo     ra
+zpp_no_carry:
+            ldi     0
+            phi     ra                  ; ra = address's high word
 
             mov     rd, r9
             call    zdisp_print_at
@@ -2017,6 +2285,24 @@ zds_print_obj:
 
             mov     rf, zdisp_text_buf
             call    zdisp_emit_string
+            clc                         ; BUG FIX: this was the one
+                                        ; zdisp_emit_string call site in
+                                        ; this file that returned without
+                                        ; clearing DF, so it handed the
+                                        ; caller whatever K_MSG happened
+                                        ; to leave -- and on real ELF-DOS
+                                        ; hardware that is DF=1, so
+                                        ; print_obj printed its object's
+                                        ; name correctly and then reported
+                                        ; a bogus opcode error. Invisible
+                                        ; under Run/02 (its emulated K_MSG
+                                        ; returns DF=0) and invisible to
+                                        ; diag/zdispatchdiag.asm (its own
+                                        ; zdisp_emit_string double already
+                                        ; ended in clc). zdisp_emit_string
+                                        ; itself now guarantees DF=0 too;
+                                        ; this stays for symmetry with
+                                        ; every other call site here.
             rtn
 
 ; ---- save: per the V1-3 branch encoding, the branch is committed
@@ -2050,6 +2336,17 @@ zds_save:
                                         ; zdisp_branch uses R7 for its
                                         ; own condition parameter
 
+            mov     r9, zdisp_value2    ; destination pointer FIRST,
+            mov     r8, zdisp_pc_bank   ; byte LAST -- mov clobbers d
+            ldn     r8                  ; (toolchain gotcha #2); this
+            str     r9                  ; used to stash zdisp_value2's
+                                        ; own low address byte instead
+                                        ; of the bank. zdisp_value2 =
+                                        ; fallthrough pc's own bank -- a
+                                        ; taken branch below could change
+                                        ; it, and the undo path needs it
+                                        ; back exactly as it was
+
             ldi     1
             call    zdisp_branch        ; unconditionally commits the
                                         ; branch target into zdisp_pc
@@ -2068,6 +2365,11 @@ zds_save:
             inc     r8
             glo     r9
             str     r8                  ; undo: zdisp_pc = fallthrough
+            mov     r9, zdisp_pc_bank   ; pointer first, byte last --
+            mov     r8, zdisp_value2    ; same D-clobber fix as the
+            ldn     r8                  ; stash above
+            str     r9                  ; undo: zdisp_pc_bank =
+                                        ; fallthrough's own bank
 
 zds_save_done:
             clc
@@ -2255,6 +2557,49 @@ zslt_true:
             rtn
             endp
 
+; zwide_add_signed (internal): RD = bank (high word), RF = offset (low
+; word), RC = signed 16-bit delta (all set immediately before the
+; call). Returns RD:RF = the updated bank:offset, carrying into (or
+; borrowing out of) the bank when the offset arithmetic wraps past a
+; 64K boundary. Needed by any bank:offset address computation that
+; adds a SIGNED delta -- branch/jump targets -- unlike zmread_bytes'
+; own always-forward, unsigned "+1 per byte" advance, which never
+; needs this. Uses this project's own established SM/SMB convention
+; (DF=1 means NO borrow) for the negative-delta case; ADD's own DF
+; (unrelated to SM/SMB -- DF=1 here means a carry DID occur) for the
+; positive case.
+            proc    zwide_add_signed
+            ghi     rc
+            ani     $80
+            lbnz    zwas_negative
+
+; delta >= 0: plain add, carry into the bank on overflow
+            add16   rf, rc
+            lbnf    zwas_done           ; DF=0: no carry
+            add16   rd, 1
+zwas_done:
+            rtn
+
+zwas_negative:
+; delta < 0: subtract its magnitude, borrowing out of the bank if the
+; offset itself underflows
+            ghi     rc
+            not
+            phi     rc
+            glo     rc
+            not
+            plo     rc
+            add16   rc, 1               ; rc = |delta|
+
+            sub16   rf, rc              ; DF=1 (no borrow): offset >=
+                                        ; magnitude, bank unchanged;
+                                        ; DF=0 (borrow): offset itself
+                                        ; wrapped, bank -= 1
+            lbdf    zwas_done
+            sub16   rd, 1
+            rtn
+            endp
+
 ; zdisp_branch (internal): D = condition, 0 or 1 (set immediately
 ; before the call). Reads instr.branch_on_true/branch_offset/addr/
 ; length from zdisp_instr. If the branch is taken, either delegates to
@@ -2308,16 +2653,48 @@ zdb_jump:
             phi     ra
             ldn     rf
             plo     ra                  ; ra = length
-            add16   r9, ra              ; r9 = after
-            add16   r9, r8              ; r9 = after + offset
-            sub16   r9, 2               ; r9 = after + offset - 2
+            add16   r9, ra              ; r9 = after (== zdisp_pc's own
+                                        ; current value, already
+                                        ; committed by zdisp_step's own
+                                        ; preamble -- zdisp_pc_bank
+                                        ; there already reflects this
+                                        ; sum's own bank, reused
+                                        ; directly below rather than
+                                        ; recomputed)
+            sub16   r8, 2               ; r8 = branch_offset - 2 (a
+                                        ; small signed adjustment,
+                                        ; always safely within 16-bit
+                                        ; signed range on its own)
 
-            mov     rf, zdisp_pc
-            ghi     r9
-            str     rf
-            inc     rf
-            glo     r9
-            str     rf
+            mov     rf, zdisp_pc_bank
+            ldn     rf
+            plo     rd
+            ldi     0
+            phi     rd                  ; rd = 0:zdisp_pc_bank ("after"
+                                        ; address's own bank) -- BUG FIX:
+                                        ; the phi/plo were the wrong way
+                                        ; round, making RD $0100 rather
+                                        ; than $0001 for bank 1, so
+                                        ; zwide_add_signed's own result
+                                        ; bank came back with its real
+                                        ; value in the high byte and
+                                        ; "glo rd" then stored 0. Every
+                                        ; taken branch and every jump
+                                        ; inside a routine past 64K
+                                        ; silently dropped back to bank 0
+            mov     rf, r9              ; rf = after's low word
+            mov     rc, r8              ; rc = signed delta
+            call    zwide_add_signed    ; rd:rf = target bank:offset
+
+            mov     r9, zdisp_pc
+            ghi     rf
+            str     r9
+            inc     r9
+            glo     rf
+            str     r9                  ; zdisp_pc = target offset
+            mov     r9, zdisp_pc_bank
+            glo     rd
+            str     r9                  ; zdisp_pc_bank = target bank
             clc
             rtn
 
@@ -2341,14 +2718,15 @@ zdb_not_taken:
                                         ; since zvar_frame_pop's own
                                         ; clobber footprint is wide
 
-            call    zvar_frame_pop      ; rd = return_pc, rf.0 =
+            call    zvar_frame_pop      ; rd = return_pc, rc.0 =
+                                        ; return_pc's own bank, rf.0 =
                                         ; store_variable -- NOT in d;
                                         ; zvar_frame_pop's own internal
                                         ; bookkeeping (stack_base
                                         ; restore) runs more arithmetic
-                                        ; after setting rf.0, so d no
-                                        ; longer holds it by the time
-                                        ; this returns
+                                        ; after setting rf.0/rc.0, so d
+                                        ; no longer holds either by the
+                                        ; time this returns
             lbdf    zdret_fail
 
             glo     rf                  ; d = store_variable, from
@@ -2363,6 +2741,14 @@ zdb_not_taken:
             inc     r8
             glo     rd
             str     r8                  ; zdisp_pc = return_pc
+            mov     r8, zdisp_pc_bank
+            glo     rc
+            str     r8                  ; zdisp_pc_bank = return_pc's
+                                        ; own bank, from zvar_frame_
+                                        ; pop's own rc.0 output --
+                                        ; captured here, before rc
+                                        ; itself gets reused for the
+                                        ; return value just below
 
             mov     rf, zdisp_value
             lda     rf
@@ -2398,27 +2784,86 @@ zdret_fail:
             lda     rf
             phi     r8
             ldn     rf
-            plo     r8                  ; r8 = operand[0]
-            shl16   r8                  ; r8 = routine_addr (V3
-                                        ; packing: *2)
+            plo     r8                  ; r8 = operand[0] (packed addr)
 
-            mov     r9, zdisp_routine_addr
-            ghi     r8
-            str     r9
-            inc     r9
+; ---- call 0: Z-Machine Standard 6.4.3 -- calling packed address 0 is
+; legal and does nothing whatsoever. No frame is pushed, zdisp_pc keeps
+; the fallthrough zdisp_step already committed, and the store variable
+; simply gets false. Real V3 files depend on it: an object with no
+; "action routine" property falls back to a property default of 0 and
+; the game calls that unconditionally -- ZORK I does exactly this while
+; listing the objects in a room, and without this the interpreter went
+; on to read the story HEADER as a routine header (local_count = the
+; version byte, 3) and execute the object table as code. Mirrors
+; host/dispatch.c's own do_call, fixed in the same pass.
             glo     r8
-            str     r9                  ; zdisp_routine_addr =
-                                        ; routine_addr
+            lbnz    zdc_real_call
+            ghi     r8
+            lbnz    zdc_real_call
+            mov     rf, 0               ; rf = false, the stored result
+            mov     r8, zdisp_instr+ZDI_STORE_VARIABLE
+            ldn     r8                  ; d = store variable (loaded
+                                        ; LAST -- mov clobbers d)
+            call    zvar_write
+            rtn                         ; zvar_write's own df is the
+                                        ; result: 0 on success
 
-            mov     rd, r8
-            call    zmread              ; d = local_count byte, df=err
+zdc_real_call:
+            glo     r8
+            shl
+            plo     r8
+            ghi     r8
+            shlc
+            phi     r8                  ; r8 = operand[0]*2, wrapped to
+                                        ; 16 bits; DF = the 17th bit --
+                                        ; doubling a packed routine
+                                        ; address can legitimately
+                                        ; carry into it for a story
+                                        ; file over 64K (most of the V3
+                                        ; sample library), which a
+                                        ; plain shl16 would silently
+                                        ; discard (same fix as zds_
+                                        ; print_paddr's own, same
+                                        ; reasoning)
+            ldi     0
+            plo     r9
+            lbnf    zdc_no_carry
+            ldi     1
+            plo     r9
+zdc_no_carry:
+            ldi     0
+            phi     r9                  ; r9 = routine_addr's own high
+                                        ; word
+
+            mov     rb, zdisp_routine_addr
+            ghi     r8
+            str     rb
+            inc     rb
+            glo     r8
+            str     rb                  ; zdisp_routine_addr =
+                                        ; routine_addr's low word
+            mov     rb, zdisp_routine_addr_hi
+            ghi     r9
+            str     rb
+            inc     rb
+            glo     r9
+            str     rb                  ; zdisp_routine_addr_hi =
+                                        ; routine_addr's high word
+
+            mov     rd, r8              ; rd = routine_addr low word
+            mov     ra, r9              ; ra = routine_addr high word
+            mov     rf, zdisp_call_scratch
+            mov     rc, 1
+            call    zmread_bytes        ; rc = actual bytes copied (0
+                                        ; or 1 -- no partial case for a
+                                        ; 1-byte request, so df=1 alone
+                                        ; is the right failure check
+                                        ; here); df=err
             lbdf    zdc_fail
 
-            plo     r9                  ; r9.0 = local_count -- stashed
-                                        ; in a register, since `mov
-                                        ; rX,symbol`'s own internal
-                                        ; ldi's would clobber d before
-                                        ; a direct `str` could use it
+            mov     r9, zdisp_call_scratch
+            ldn     r9                  ; d = local_count byte
+            plo     r9                  ; r9.0 = local_count
             mov     r8, zdisp_local_count
             glo     r9
             str     r8                  ; zdisp_local_count = local_count
@@ -2443,23 +2888,66 @@ zdc_loop:
                                         ; ever increases by 1 from 0)
             lbz     zdc_loop_done
 
-; default = zmread16(routine_addr + 1 + i*2)
+; default = word at (routine_addr_wide + 1 + i*2) -- the routine's own
+; wide address plus a small, always-positive delta, computed via
+; zwide_add_signed (safe to reuse for a positive delta too) then
+; fetched through zmread_bytes (wide-aware, unlike the plain 16-bit
+; zmread16 this used before)
             mov     rf, zdisp_i
             ldn     rf
             shl                         ; d = i*2
-            plo     r8
+            adi     1                   ; d = 1+i*2
+            plo     r9
             ldi     0
-            phi     r8                  ; r8 = 0:(i*2)
-            mov     r9, zdisp_routine_addr
-            lda     r9
-            phi     ra
-            ldn     r9
-            plo     ra                  ; ra = routine_addr
-            add16   ra, 1
-            add16   ra, r8              ; ra = routine_addr+1+i*2
-            mov     rd, ra
-            call    zmread16            ; rf = default value, df=err
+            phi     r9                  ; r9 = 0:(1+i*2), the delta
+
+            mov     r8, zdisp_routine_addr_hi
+            lda     r8
+            phi     rd
+            ldn     r8
+            plo     rd                  ; rd = routine_addr's high word
+                                        ; -- BUG FIX: this used to do
+                                        ; "ldn r8 / phi rd / ldi 0 / plo
+                                        ; rd", which reads only the
+                                        ; stored WORD's high byte (always
+                                        ; 0) and then puts it in RD's
+                                        ; high half as well, so RD came
+                                        ; out 0 no matter what. The bank
+                                        ; of any routine past 64K was
+                                        ; therefore lost: its local
+                                        ; defaults were read from bank 0,
+                                        ; and zdisp_pc_bank was left 0
+                                        ; after the call, so execution
+                                        ; resumed at the right OFFSET in
+                                        ; the wrong bank. Invisible until
+                                        ; a story actually called a
+                                        ; routine up there -- ZORK I's
+                                        ; first one is its mailbox
+                                        ; open/close handler.
+            mov     r8, zdisp_routine_addr
+            lda     r8
+            phi     rf
+            ldn     r8
+            plo     rf                  ; rf = routine_addr low word
+            mov     rc, r9              ; rc = delta
+            call    zwide_add_signed    ; rd:rf = target bank:offset
+
+            mov     ra, rd              ; ra = target's high word --
+                                        ; stashed before rd itself is
+                                        ; reused as zmread_bytes' own
+                                        ; low-word input just below
+            mov     rd, rf              ; rd = target's low word
+            mov     rf, zdisp_call_scratch
+            mov     rc, 2
+            call    zmread_bytes        ; rc = actual bytes copied
             lbdf    zdc_fail
+
+            mov     r9, zdisp_call_scratch
+            lda     r9
+            phi     rf
+            ldn     r9
+            plo     rf                  ; rf = default value (big-
+                                        ; endian, from the scratch buf)
 
             mov     r9, zdisp_value
             ghi     rf
@@ -2536,6 +3024,9 @@ zdc_loop_done:
             phi     rd
             ldn     r8
             plo     rd                  ; rd = return_pc
+            mov     r8, zdisp_next_pc_bank
+            ldn     r8
+            plo     ra                  ; ra.0 = return_pc's own bank
 
             mov     rf, zdisp_locals
 
@@ -2549,28 +3040,56 @@ zdc_loop_done:
             call    zvar_frame_push
             lbdf    zdc_fail
 
-; pc = routine_addr + 1 + local_count*2
+; pc = routine_addr_wide + 1 + local_count*2 (same zwide_add_signed
+; pattern as the per-local default reads above)
             mov     r8, zdisp_local_count
             ldn     r8
-            shl
+            shl                         ; d = local_count*2
+            adi     1                   ; d = 1+local_count*2
             plo     r9
             ldi     0
-            phi     r9                  ; r9 = local_count*2
+            phi     r9                  ; r9 = 0:(1+local_count*2)
+
+            mov     r8, zdisp_routine_addr_hi
+            lda     r8
+            phi     rd
+            ldn     r8
+            plo     rd                  ; rd = routine_addr's high word
+                                        ; -- BUG FIX: this used to do
+                                        ; "ldn r8 / phi rd / ldi 0 / plo
+                                        ; rd", which reads only the
+                                        ; stored WORD's high byte (always
+                                        ; 0) and then puts it in RD's
+                                        ; high half as well, so RD came
+                                        ; out 0 no matter what. The bank
+                                        ; of any routine past 64K was
+                                        ; therefore lost: its local
+                                        ; defaults were read from bank 0,
+                                        ; and zdisp_pc_bank was left 0
+                                        ; after the call, so execution
+                                        ; resumed at the right OFFSET in
+                                        ; the wrong bank. Invisible until
+                                        ; a story actually called a
+                                        ; routine up there -- ZORK I's
+                                        ; first one is its mailbox
+                                        ; open/close handler.
             mov     r8, zdisp_routine_addr
             lda     r8
-            phi     ra
+            phi     rf
             ldn     r8
-            plo     ra                  ; ra = routine_addr
-            add16   ra, 1
-            add16   ra, r9              ; ra = routine_addr+1+
-                                        ; local_count*2
+            plo     rf                  ; rf = routine_addr low word
+            mov     rc, r9              ; rc = delta
+            call    zwide_add_signed    ; rd:rf = new pc bank:offset
 
             mov     r8, zdisp_pc
-            ghi     ra
+            ghi     rf
             str     r8
             inc     r8
-            glo     ra
-            str     r8
+            glo     rf
+            str     r8                  ; zdisp_pc = new pc offset
+            mov     r8, zdisp_pc_bank
+            glo     rd
+            str     r8                  ; zdisp_pc_bank = new pc bank
             clc
             rtn
 
@@ -2583,12 +3102,19 @@ zdc_fail:
 ; instruction's own inline packed z-text (immediately following its
 ; 1-byte opcode, spanning the rest of instr.length -- decode already
 ; measured this exactly for a has_text opcode, the same way it does
-; for instr.length itself). zdec_decode's own output is already NUL-
-; terminated, so the whole string goes to zdisp_emit_string in one
-; call -- no need to walk it a character at a time the way host's own
-; per-character emit callback does; that shape doesn't exist on this
-; side, and doesn't need to. DF=1 on a z-text decode failure (an
-; unsupported abbreviation z-char, matching zdec_decode's own).
+; for instr.length itself). Routine code (and its own inline print
+; text) is routinely placed in high memory, so this can no longer
+; assume residency: it fetches the packed bytes through
+; zmread_bytes (guest-address, cache-aware, via zmread)
+; into zdisp_packed_buf, THEN decodes from there into zdisp_text_buf --
+; two separate buffers, since zdec_decode's own output would otherwise
+; overwrite input words it hasn't consumed yet if both lived in the
+; same place. zdec_decode's own output is already NUL-terminated, so
+; the whole decoded string goes to zdisp_emit_string in one call. DF=1
+; on a fetch failure (an out-of-range or cache I/O error) or a z-text
+; decode failure (a malformed/nested abbreviation reference or a
+; zmread/zmread_bytes failure while expanding one -- see zdec.asm's
+; own zdec_decode).
             proc    zdisp_print_inline
             mov     r8, zdisp_instr+ZDI_ADDR
             lda     r8
@@ -2596,33 +3122,7 @@ zdc_fail:
             ldn     r8
             plo     r9                  ; r9 = addr
             add16   r9, 1               ; r9 = addr+1 (skip the
-                                        ; opcode byte) -- still a GUEST
-                                        ; address at this point
-
-            mov     r8, zmbase
-            lda     r8
-            phi     ra
-            ldn     r8
-            plo     ra                  ; ra = zmbase (the real host
-                                        ; address the guest's own
-                                        ; address 0 maps to)
-            add16   r9, ra              ; r9 = the real host address of
-                                        ; the packed text -- zdec_decode
-                                        ; (unlike zmread/zde_read_byte)
-                                        ; reads real memory directly,
-                                        ; with no guest-address concept
-                                        ; of its own, so this
-                                        ; translation is this call
-                                        ; site's own job. Safe to do
-                                        ; without zmread's own bounds
-                                        ; check: decode_instruction's
-                                        ; has_text scan already walked
-                                        ; every one of these bytes
-                                        ; through zmread to measure
-                                        ; instr.length in the first
-                                        ; place, so they're already
-                                        ; known resident
-            mov     rd, r9              ; rd = packed text address
+                                        ; opcode byte) -- guest address
 
             mov     r8, zdisp_instr+ZDI_LENGTH
             lda     r8
@@ -2631,8 +3131,71 @@ zdc_fail:
             plo     ra                  ; ra = length
             sub16   ra, 1               ; ra = length-1 (packed byte
                                         ; count)
-            mov     rc, ra
 
+            mov     rd, r9              ; rd = guest address of the
+                                        ; packed text
+            mov     rf, zdisp_packed_buf
+            mov     rc, ra
+            mov     r8, zdisp_pc_bank
+            ldn     r8
+            plo     ra
+            ldi     0
+            phi     ra                  ; ra = 0:bank -- the text's own
+                                        ; bank (phi is needed here: ra
+                                        ; still holds its own high byte
+                                        ; from the earlier "ra = length"
+                                        ; computation above otherwise) --
+                                        ; inline text is addr+1 from
+                                        ; THIS instruction, whose own
+                                        ; bytes (opcode+text) share one
+                                        ; bank in every non-straddling
+                                        ; case; zdisp_pc_bank already
+                                        ; holds exactly that bank here
+                                        ; (zdisp_step's own preamble
+                                        ; committed it as part of the
+                                        ; default-fallthrough pc before
+                                        ; dispatching to this handler)
+            call    zmread_bytes  ; rc = actual bytes
+                                        ; copied; df=1 only if even the
+                                        ; very first byte failed
+            lbdf    zdpi_fail
+            mov     r9, rc              ; r9 = actual bytes copied,
+                                        ; stashed before the length
+                                        ; reload below reuses rc
+
+            mov     r8, zdisp_instr+ZDI_LENGTH  ; re-read the packed
+                                        ; byte count fresh -- ra itself
+                                        ; can't be trusted to have
+                                        ; survived the fetch call above
+                                        ; (zmread's cache path may
+                                        ; reach undocumented-clobber
+                                        ; K_FILE_* calls, same lesson
+                                        ; as zmread_cache_go's own fix)
+            lda     r8
+            phi     rc
+            ldn     r8
+            plo     rc
+            sub16   rc, 1               ; rc = length-1 (packed byte
+                                        ; count) -- what this call
+                                        ; originally asked the fetch for
+
+; unlike zdisp_print_at's own deliberately generous, best-effort cap,
+; inline text's count is exact (decode_instruction's own has_text scan
+; already measured it via zmread) -- a short copy here means that scan
+; and this fetch disagree about what's readable, which shouldn't
+; happen and isn't safe to paper over
+            glo     r9
+            str     r2
+            glo     rc
+            xor
+            lbnz    zdpi_fail
+            ghi     r9
+            str     r2
+            ghi     rc
+            xor
+            lbnz    zdpi_fail
+
+            mov     rd, zdisp_packed_buf
             mov     rf, zdisp_text_buf
             call    zdec_decode         ; decodes into zdisp_text_buf,
                                         ; NUL-terminated
@@ -2648,19 +3211,44 @@ zdpi_fail:
             rtn
             endp
 
-; zdisp_print_at (internal): RD = real host address of packed z-text
-; (set immediately before the call). Decodes and emits it, using a
-; generous fixed length (matching zdisp_text_buf's own capacity)
-; rather than a caller-supplied one -- unlike inline text (measured by
-; decode_instruction's own has_text scan) or an object's short name
-; (measured by zobj_short_name), print_addr/print_paddr point at
-; arbitrary story-file text with no prior length measurement anywhere
-; in this pipeline. Safe because zdec_decode itself stops at the real
-; end-of-string word regardless of how much of the given length goes
-; unused (see zdec.asm's own zdec_word_done), matching the "trust the
-; input" boundary zdisp_text_buf's own declaration already documents.
+; zdisp_print_at (internal): RD = GUEST address of packed z-text (low
+; word), RA = that address's high word (both set immediately before
+; the call; RA is 0 for print_addr, whose operand is always a plain
+; 16-bit byte address, and possibly nonzero for print_paddr, whose
+; packed operand*2 can legitimately exceed 65535 in a V3 story file
+; over 64K) -- print_addr/print_paddr point at arbitrary story-file
+; text, almost always static or high memory, so this fetches through
+; zmread_bytes (cache-aware, via zmread_wide) into zdisp_packed_buf
+; before decoding into zdisp_text_buf, the same two-buffer split
+; zdisp_print_inline uses and for the same reason. Uses a generous
+; fixed length (matching both buffers' own
+; capacity) rather than a caller-supplied one -- unlike inline text
+; (measured by decode_instruction's own has_text scan) or an object's
+; short name (measured by zobj_short_name), print_addr/print_paddr
+; have no prior length measurement anywhere in this pipeline. Safe
+; because zdec_decode itself stops at the real end-of-string word
+; regardless of how much of the given length goes unused (see
+; zdec.asm's own zdec_word_done), matching the "trust the input"
+; boundary both buffers' own declarations already document -- and
+; zmread_bytes returns whatever it actually managed to copy
+; (short of 512 near a real story file's own end is a normal outcome,
+; not a failure) rather than requiring the full generous request to
+; succeed, so a short story nearing the end of its own file doesn't
+; need padding.
             proc    zdisp_print_at
+            mov     rf, zdisp_packed_buf
             mov     rc, 512
+            call    zmread_bytes  ; rc = actual bytes
+                                        ; copied (<=512); df=1 only if
+                                        ; even the very first byte
+                                        ; failed
+            lbdf    zdpa_fail
+
+            mov     rd, zdisp_packed_buf    ; rc already holds the
+                                        ; actual copied count from the
+                                        ; fetch above -- consumed
+                                        ; directly, nothing called in
+                                        ; between to put it at risk
             mov     rf, zdisp_text_buf
             call    zdec_decode
             lbdf    zdpa_fail
@@ -2900,11 +3488,208 @@ zum_done:
             rtn
             endp
 
+; zdisp_udivmod16 (internal): RD = dividend, RF = divisor, both 16-bit
+; unsigned (set immediately before the call). Returns RD = quotient,
+; RF = remainder. DF=1 if divisor is 0. Same 16-iteration restoring
+; division as zdisp_umod16 just above (same r7/rc shift chain, same
+; low-to-high SHL/SHLC threading of the bit that falls off r7 into
+; rc), kept as its own routine rather than folding into zdisp_umod16
+; itself so zdisp_umod16's own already-verified caller (random) is
+; untouched. The quotient (r8) needs no external carry threaded in --
+; its own new bit is either 0 (default) or set to 1 explicitly when a
+; trial subtraction commits -- so it shifts with the plain shl16
+; macro instead of a manual chain.
+            proc    zdisp_udivmod16
+            glo     rf
+            lbnz    zud_have_divisor
+            ghi     rf
+            lbnz    zud_have_divisor
+            stc
+            rtn
+
+zud_have_divisor:
+            mov     r9, rf              ; r9 = divisor (survives the
+                                        ; whole loop; rf itself is
+                                        ; reused for the remainder
+                                        ; result at the end)
+            mov     r7, rd              ; r7 = dividend (shifted left
+                                        ; one bit per iteration)
+            ldi     16
+            plo     rb                  ; rb.0 = iteration count
+            ldi     0
+            plo     rc
+            phi     rc                  ; rc = 0 (remainder
+                                        ; accumulator)
+            ldi     0
+            plo     r8
+            phi     r8                  ; r8 = 0 (quotient accumulator)
+
+zud_loop:
+            glo     rb
+            lbz     zud_done
+
+            glo     r7
+            shl
+            plo     r7
+            ghi     r7
+            shlc
+            phi     r7                  ; r7 <<= 1; DF = bit that fell
+                                        ; off bit15
+
+            glo     rc
+            shlc
+            plo     rc
+            ghi     rc
+            shlc
+            phi     rc                  ; rc <<= 1, carry-in = the bit
+                                        ; that fell off r7 -- same low-
+                                        ; to-high chaining as
+                                        ; zdisp_umod16 above
+
+            shl16   r8                  ; quotient <<= 1, zero-filled
+
+            mov     rd, rc
+            sub16   rd, r9              ; rd = rc - r9; DF=1 (no
+                                        ; borrow) means rc >= r9
+            lbnf    zud_no_sub
+            mov     rc, rd              ; commit: rc -= r9
+            glo     r8
+            ori     1
+            plo     r8                  ; set quotient's new bit0
+
+zud_no_sub:
+            dec     rb
+            lbr     zud_loop
+
+zud_done:
+            mov     rd, r8              ; rd = quotient
+            mov     rf, rc              ; rf = remainder
+            clc
+            rtn
+            endp
+
+; zdisp_sdivmod16 (internal): RD = dividend, RF = divisor, both signed
+; 16-bit (set immediately before the call). Returns RD = quotient,
+; RC = remainder, both signed -- truncating toward zero with the
+; remainder taking the dividend's sign, matching the Z-machine spec
+; (and C's own convention). DF=1 if divisor is 0, propagated straight
+; from zdisp_udivmod16. Computes both results from one division so
+; div/mod's shared sign bookkeeping is written once, not twice.
+            proc    zdisp_sdivmod16
+            mov     r8, zdisp_value
+            ghi     rd
+            str     r8
+            inc     r8
+            glo     rd
+            str     r8                  ; zdisp_value = dividend's
+                                        ; original value -- spilled to
+                                        ; memory, NOT kept in r8,
+                                        ; because zdisp_udivmod16 below
+                                        ; clobbers r8 (its own quotient
+                                        ; accumulator) and r9 (its own
+                                        ; divisor copy); nothing needed
+                                        ; after that call can survive
+                                        ; in either register
+            mov     r8, zdisp_value2
+            ghi     rf
+            str     r8
+            inc     r8
+            glo     rf
+            str     r8                  ; zdisp_value2 = divisor's
+                                        ; original value
+
+            ghi     rd
+            ani     $80
+            lbz     zsd_dividend_pos
+            ghi     rd
+            not
+            phi     rd
+            glo     rd
+            not
+            plo     rd
+            add16   rd, 1               ; rd = |dividend|
+zsd_dividend_pos:
+
+            ghi     rf
+            ani     $80
+            lbz     zsd_divisor_pos
+            ghi     rf
+            not
+            phi     rf
+            glo     rf
+            not
+            plo     rf
+            add16   rf, 1               ; rf = |divisor|
+zsd_divisor_pos:
+
+            call    zdisp_udivmod16     ; rd = |quotient|, rf =
+                                        ; |remainder|; df=1 if the
+                                        ; divisor was 0
+            lbdf    zsd_fail
+
+            mov     rc, rf              ; rc = |remainder|, moved out
+                                        ; of rf before rf is clobbered
+                                        ; by the byte-compare idiom
+                                        ; below
+
+; quotient sign: negative iff the two original operands' signs
+; differed (same register-compare-via-memory idiom as zcache.asm's own
+; offset check -- the 1802 has no register-register xor). Both
+; operands are reloaded from zdisp_value/zdisp_value2, not r8/r9 (see
+; this proc's own header note above).
+            mov     r8, zdisp_value
+            lda     r8                  ; d = dividend's original high
+                                        ; byte
+            str     r2
+            mov     r8, zdisp_value2
+            ldn     r8                  ; d = divisor's original high
+                                        ; byte
+            xor
+            ani     $80
+            lbz     zsd_quotient_pos
+            ghi     rd
+            not
+            phi     rd
+            glo     rd
+            not
+            plo     rd
+            add16   rd, 1               ; rd = -quotient
+zsd_quotient_pos:
+
+; remainder sign: matches the dividend's original sign
+            mov     r8, zdisp_value
+            ldn     r8                  ; d = dividend's original high
+                                        ; byte
+            ani     $80
+            lbz     zsd_done
+            ghi     rc
+            not
+            phi     rc
+            glo     rc
+            not
+            plo     rc
+            add16   rc, 1               ; rc = -remainder
+zsd_done:
+            clc
+            rtn
+
+zsd_fail:
+            stc
+            rtn
+            endp
+
             proc    _zdispatch_data
 zdisp_pc:            dw      0
+zdisp_pc_bank:       db      0       ; zdisp_pc's own high word/bank --
+                                    ; a V3 story file over 64K (most of
+                                    ; the sample library) can have code
+                                    ; beyond the first 64K, which a
+                                    ; plain 16-bit zdisp_pc can't
+                                    ; represent on its own
 zdisp_quit:           db      0
 zdisp_i:              db      0
 zdisp_next_pc:         dw      0
+zdisp_next_pc_bank:    db      0
 zdisp_value:            dw      0
 zdisp_value2:           dw      0       ; second scratch word, for
                                         ; opcodes that need two 16-bit
@@ -2912,7 +3697,21 @@ zdisp_value2:           dw      0       ; second scratch word, for
                                         ; call (dec_chk/inc_chk's own
                                         ; updated value + threshold)
 zdisp_routine_addr:      dw      0
+zdisp_routine_addr_hi:   dw      0
 zdisp_local_count:        db      0
+zdisp_call_scratch:       ds      2       ; zdisp_do_call's own 1-2
+                                        ; byte staging area for its
+                                        ; zmread_bytes-based reads (the
+                                        ; routine header's local_count
+                                        ; byte, and each local's own
+                                        ; default value word) -- needed
+                                        ; since those addresses can
+                                        ; legitimately exceed 65535 in
+                                        ; a V3 story file over 64K, and
+                                        ; zmread_bytes (unlike the
+                                        ; plain 16-bit zmread/zmread16)
+                                        ; is the one primitive here
+                                        ; that's already wide-aware
 zdisp_instr:               ds      ZDI_SIZE
 zdisp_operand:              ds      8       ; 4 resolved operand words
 zdisp_locals:                ds      30      ; up to 15 locals
@@ -2925,6 +3724,18 @@ zdisp_text_buf:               ds      512     ; decoded print-family
                                               ; (matches this project's
                                               ; established "trust the
                                               ; input" boundary)
+zdisp_packed_buf:              ds      512     ; raw packed z-text
+                                              ; bytes staged here by
+                                              ; zmread_bytes
+                                              ; before zdec_decode runs
+                                              ; -- kept separate from
+                                              ; zdisp_text_buf (the
+                                              ; DECODED output) since
+                                              ; decode can't safely
+                                              ; write its own output
+                                              ; over not-yet-consumed
+                                              ; input in the same
+                                              ; buffer
 zdisp_newline_buf:             db      10, 0   ; a constant 2-byte
                                               ; NUL-terminated "\n",
                                               ; reused by both
@@ -2947,17 +3758,22 @@ zrand_tmp:                     ds      4       ; zrand_stash/xor_tmp's
                                               ; own 32-bit scratch
 
                 public  zdisp_pc
+                public  zdisp_pc_bank
                 public  zdisp_quit
                 public  zdisp_i
                 public  zdisp_next_pc
+                public  zdisp_next_pc_bank
                 public  zdisp_value
                 public  zdisp_value2
                 public  zdisp_routine_addr
+                public  zdisp_routine_addr_hi
                 public  zdisp_local_count
+                public  zdisp_call_scratch
                 public  zdisp_instr
                 public  zdisp_operand
                 public  zdisp_locals
                 public  zdisp_text_buf
+                public  zdisp_packed_buf
                 public  zdisp_newline_buf
                 public  zdisp_char_buf
                 public  zdisp_num_buf

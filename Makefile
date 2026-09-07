@@ -3,9 +3,9 @@ CFLAGS ?= -std=c99 -Wall -Wextra -Werror -Ihost
 
 HOST_TEST = build/test_host
 ASM ?= /opt/elfc/asm02
-ASMFLAGS ?= -r -I ..
+ASMFLAGS ?= -I ..
 LINK ?= /opt/elfc/link02
-LFLAGS ?= -b -be -r
+LFLAGS ?= -b -be
 
 HOST_SOURCES = host/story_mem.c host/story_header.c host/vm_state.c \
 	host/ztext.c host/objects.c host/properties.c host/dictionary.c \
@@ -14,21 +14,40 @@ ASM_MODULES = lib/zstack.prg lib/zmem.prg lib/zcache.prg lib/zobj.prg \
 	lib/zprop.prg lib/zdict.prg lib/zparse.prg lib/zterm.prg lib/zdec.prg \
         lib/zinputl.prg lib/zdecode.prg lib/zvar.prg lib/zdispatch.prg \
 	lib/zdispemit.prg lib/zdispread.prg lib/zdispsave.prg lib/fmt32.prg \
-	lib/ymodem.prg
+	lib/ymodem.prg lib/zheader.prg lib/zload.prg lib/zstatus.prg \
+	lib/env.prg lib/heap_bump.prg
+ZRUN3_MODULES = lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg \
+	lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg \
+	lib/ymodem.prg lib/fmt32.prg lib/zdict.prg lib/zparse.prg \
+	lib/zcache.prg lib/zheader.prg lib/zload.prg lib/zstatus.prg \
+	lib/env.prg lib/heap_bump.prg lib/zdispemit.prg lib/zdispread.prg \
+	lib/zdispsave.prg lib/zterm.prg lib/zinputl.prg
 DIAG_MODULES = diag/zdiag.prg diag/zdiag_main.prg diag/zobjdiag.prg \
 	diag/zobjdiag_main.prg diag/zpropdiag.prg diag/zpropdiag_main.prg \
 	diag/zdictdiag.prg diag/zdictdiag_main.prg diag/zparsediag.prg \
 	diag/zparsediag_main.prg diag/ztermdiag.prg diag/ztermdiag_main.prg \
 	diag/zdecdiag.prg diag/zdecdiag_main.prg diag/zdecodediag.prg \
 	diag/zdecodediag_main.prg diag/zvardiag.prg diag/zvardiag_main.prg \
-	diag/zdispatchdiag.prg diag/zdispatchdiag_main.prg
+	diag/zdispatchdiag.prg diag/zdispatchdiag_main.prg \
+	diag/zmcachediag.prg diag/zmcachediag_main.prg \
+	diag/zheaderdiag.prg diag/zheaderdiag_main.prg
 
-.PHONY: all test asm diag clean
+.PHONY: all test asm diag zrun3 zrun_ref clean
 
 all: test
 
 test: $(HOST_TEST)
 	$(HOST_TEST)
+
+# zrun_ref: the host reference core built as a runnable interpreter, so its
+# output can be diffed against what zrun3 produces on ELF-DOS. Not part of
+# `make all` -- it is a debugging oracle, not a test. NOTE: host/story_mem.c
+# caps the image at 64K, so this cannot yet run a real V3 story file; making
+# it a true oracle means widening pc/packed addresses to 32 bits.
+zrun_ref: build/zrun_ref
+
+build/zrun_ref: tools/zrun_ref.c $(filter host/%,$(HOST_SOURCES))
+	$(CC) $(CFLAGS) -o $@ tools/zrun_ref.c $(filter host/%,$(HOST_SOURCES))
 
 asm: $(ASM_MODULES)
 	@test -f lib/zmem.prg
@@ -46,6 +65,11 @@ asm: $(ASM_MODULES)
 	@test -f lib/zdispemit.prg
 	@test -f lib/zdispread.prg
 	@test -f lib/zdispsave.prg
+	@test -f lib/zheader.prg
+	@test -f lib/zload.prg
+	@test -f lib/zstatus.prg
+	@test -f lib/env.prg
+	@test -f lib/heap_bump.prg
 
 # diag/zdiag_main, diag/zobjdiag_main, diag/zpropdiag_main,
 # diag/zdictdiag_main, diag/zparsediag_main, diag/zdecdiag_main,
@@ -61,6 +85,11 @@ asm: $(ASM_MODULES)
 # call otherwise.
 # diag/ztermdiag_main is different: it's an interactive demo, not an
 # automated check list (see zterm.asm's own header comment for why).
+# diag/zmcachediag_main is also different: unlike every other check
+# list here, it genuinely needs the real kernel filesystem (creates
+# and deletes its own small scratch file) to exercise zmread's cache-
+# fallback path -- see zmcachediag.asm's own header for why a fake FCB
+# can't stand in for a real one there.
 diag: $(ASM_MODULES) $(DIAG_MODULES)
 	$(LINK) $(LFLAGS) -o diag/zdiag diag/zdiag_main.prg diag/zdiag.prg lib/zmem.prg lib/zcache.prg lib/zstack.prg
 	rm -f diag/zdiag.lkb
@@ -74,7 +103,7 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	rm -f diag/zparsediag.lkb
 	$(LINK) $(LFLAGS) -o diag/ztermdiag diag/ztermdiag_main.prg lib/zterm.prg lib/zinputl.prg
 	rm -f diag/ztermdiag.lkb
-	$(LINK) $(LFLAGS) -o diag/zdecdiag diag/zdecdiag_main.prg diag/zdecdiag.prg lib/zdec.prg
+	$(LINK) $(LFLAGS) -o diag/zdecdiag diag/zdecdiag_main.prg diag/zdecdiag.prg lib/zdec.prg lib/zmem.prg lib/zcache.prg
 	rm -f diag/zdecdiag.lkb
 	$(LINK) $(LFLAGS) -o diag/zdecodediag diag/zdecodediag_main.prg diag/zdecodediag.prg lib/zdecode.prg lib/zmem.prg lib/zcache.prg
 	rm -f diag/zdecodediag.lkb
@@ -95,6 +124,21 @@ diag: $(ASM_MODULES) $(DIAG_MODULES)
 	# both together (duplicate symbol).
 	$(LINK) $(LFLAGS) -o diag/zdispatchdiag diag/zdispatchdiag_main.prg diag/zdispatchdiag.prg lib/zdispatch.prg lib/zdecode.prg lib/zvar.prg lib/zstack.prg lib/zmem.prg lib/zdec.prg lib/zobj.prg lib/zprop.prg lib/ymodem.prg lib/fmt32.prg lib/zdict.prg lib/zparse.prg lib/zcache.prg
 	rm -f diag/zdispatchdiag.lkb
+	$(LINK) $(LFLAGS) -o diag/zmcachediag diag/zmcachediag_main.prg diag/zmcachediag.prg lib/zmem.prg lib/zcache.prg
+	rm -f diag/zmcachediag.lkb
+	$(LINK) $(LFLAGS) -o diag/zheaderdiag diag/zheaderdiag_main.prg diag/zheaderdiag.prg lib/zheader.prg
+	rm -f diag/zheaderdiag.lkb
+
+# zrun3: the real ELF-DOS interpreter -- unlike diag/zdispatchdiag, it
+# links the REAL zdispemit/zdispread/zdispsave/zterm/zinputl (kernel-
+# backed) instead of any test double, since it needs to actually talk
+# to a player and a real save file.
+zrun3: $(ASM_MODULES) zrun3_main.prg
+	$(LINK) $(LFLAGS) -o zrun3 zrun3_main.prg $(ZRUN3_MODULES)
+	rm -f zrun3.lkb
+
+zrun3_main.prg: zrun3_main.asm include/opcodes.def include/bios.inc include/kernel_api.inc
+	$(ASM) zrun3_main.asm
 
 lib/%.prg: lib/%.asm include/opcodes.def
 	cd lib && $(ASM) $(ASMFLAGS) $*.asm
@@ -112,4 +156,5 @@ clean:
 	rm -rf build
 	rm -f $(ASM_MODULES) $(ASM_MODULES:.prg=.build) $(ASM_MODULES:.prg=.lst)
 	rm -f $(DIAG_MODULES) $(DIAG_MODULES:.prg=.build) $(DIAG_MODULES:.prg=.lst)
-	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb diag/zparsediag diag/zparsediag.lkb diag/ztermdiag diag/ztermdiag.lkb diag/zdecdiag diag/zdecdiag.lkb diag/zdecodediag diag/zdecodediag.lkb diag/zvardiag diag/zvardiag.lkb diag/zdispatchdiag diag/zdispatchdiag.lkb
+	rm -f diag/zdiag diag/zdiag.lkb diag/zobjdiag diag/zobjdiag.lkb diag/zpropdiag diag/zpropdiag.lkb diag/zdictdiag diag/zdictdiag.lkb diag/zparsediag diag/zparsediag.lkb diag/ztermdiag diag/ztermdiag.lkb diag/zdecdiag diag/zdecdiag.lkb diag/zdecodediag diag/zdecodediag.lkb diag/zvardiag diag/zvardiag.lkb diag/zdispatchdiag diag/zdispatchdiag.lkb diag/zmcachediag diag/zmcachediag.lkb diag/zheaderdiag diag/zheaderdiag.lkb
+	rm -f zrun3 zrun3.lkb zrun3_main.prg zrun3_main.build zrun3_main.lst

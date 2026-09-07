@@ -36,16 +36,26 @@
             extrn   z_inputl
 
 ; zterm_print_char: D = character (set by the caller immediately
-; before the call).
+; before the call). Always returns DF=0 -- see zterm_print_string.
             proc    zterm_print_char
             call    K_TYPE
+            clc
             rtn
             endp
 
 ; zterm_print_string: RD = address of a null-terminated ASCII string.
+; Always returns DF=0.
+;
+; K_MSG/K_TYPE do not document their own DF, and on real hardware K_MSG
+; returns it set; both routines used to hand that straight back. Every
+; caller here treats a DF=1 as a real failure, and zstatus.asm's own
+; zstatus_draw tail-calls zterm_print_string, so its result was really
+; K_MSG's. See lib/zdispemit.asm for the instance of this that actually
+; bit (print_obj reporting a bogus opcode error on hardware).
             proc    zterm_print_string
             mov     rf, rd
             call    K_MSG
+            clc
             rtn
             endp
 

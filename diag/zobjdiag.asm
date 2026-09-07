@@ -31,6 +31,18 @@ ZODIAG_COUNT:   equ     6
 ; check (0 = pass, 1 = fail), in the order described below.
             proc    zodiag_run
             mov     rd, zo_table
+            mov     rf, zo_table                ; zobj_init's own
+                                        ; second argument: the
+                                        ; host address guest 0
+                                        ; maps to. This fake
+                                        ; image's object table
+                                        ; IS at guest 0, so the
+                                        ; two coincide -- and
+                                        ; the proptable fields
+                                        ; below are therefore
+                                        ; plain guest offsets,
+                                        ; exactly as a real
+                                        ; story file stores them
             call    zobj_init
 
 ; check 0: initial tree shape -- object 1 is the parent of object 2,
@@ -212,7 +224,7 @@ zo_table:
                 db      0                   ; parent
                 db      0                   ; sibling
                 db      2                   ; child
-                dw      zo_table+100        ; property table address
+                dw      100        ; property table address
 ; object 2: parent = 1, sibling = 3
                 db      0,0,0,0
                 db      1

@@ -52,7 +52,7 @@ ZVDIAG_COUNT:   equ     9
 
             mov     rd, 0               ; globals_base = guest addr 0
             mov     rf, zvd_frames
-            mov     rc, zvd_frames+108
+            mov     rc, zvd_frames+111
             call    zvar_init           ; room for 3 frames
 
 ; check 0: a global written through variable 16 reads back the same
@@ -107,6 +107,7 @@ zv_store1:  str     rb
             str     rf
 
             mov     rd, $50             ; return_pc
+            mov     ra, 0               ; return_pc_bank
             mov     rf, zvd_locals
             ldi     3
             plo     rc                  ; store_variable = 3
@@ -262,6 +263,7 @@ zv_store7:  str     rb
 
 ; check 8: pushing a frame with more than 15 locals is rejected
             mov     rd, $60
+            mov     ra, 0               ; return_pc_bank
             mov     rf, zvd_locals
             ldi     0
             plo     rc
@@ -303,7 +305,7 @@ zv_fail_return:
             proc    _zvardiag_data
 zvd_mem:        ds      64
 zvd_stack:      ds      16                  ; eval stack: 8 words
-zvd_frames:     ds      108                 ; 3 frames * 36 bytes
+zvd_frames:     ds      111                 ; 3 frames * 37 bytes
 zvd_locals:     ds      4                   ; 2-word scratch array
 zvd_results:    ds      ZVDIAG_COUNT
                 public  zvd_mem

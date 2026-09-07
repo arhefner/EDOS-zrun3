@@ -58,11 +58,19 @@
             extrn   zv_frame_top
 
 FRAME_RETURN_PC:        equ     0
-FRAME_STORE_VARIABLE:   equ     2
-FRAME_LOCAL_COUNT:      equ     3
-FRAME_LOCALS:            equ     4
-FRAME_STACK_BASE:        equ     34
-FRAME_SIZE:              equ     36
+FRAME_RETURN_PC_BANK:   equ     2       ; the return address's own
+                                        ; high word/bank -- a V3 story
+                                        ; file over 64K (most of the
+                                        ; sample library) can have a
+                                        ; routine call happen from
+                                        ; beyond the first 64K, so the
+                                        ; return address needs the same
+                                        ; width as zdisp_pc itself
+FRAME_STORE_VARIABLE:   equ     3
+FRAME_LOCAL_COUNT:      equ     4
+FRAME_LOCALS:            equ     5
+FRAME_STACK_BASE:        equ     35
+FRAME_SIZE:              equ     37
 
 ; zvar_init: RD = globals_base, RF = frame-stack first byte, RC =
 ; frame-stack exclusive end.
@@ -98,13 +106,26 @@ FRAME_SIZE:              equ     36
             rtn
             endp
 
-; zvar_frame_push: RD = return_pc, RF = pointer to a local_count-word
-; array of already-resolved locals (the routine's own defaults,
+; zvar_frame_push: RD = return_pc, RA.0 = return_pc's own bank (the
+; high word/bank a story file over 64K needs alongside it -- see
+; FRAME_RETURN_PC_BANK's own comment), RF = pointer to a local_count-
+; word array of already-resolved locals (the routine's own defaults,
 ; overridden by call arguments -- the caller's job, matching host's
 ; do_call building this array before calling vm_frame_push), RC.0 =
 ; store_variable, RC.1 = local_count (0-15). DF=1 if local_count > 15
 ; or the frame stack is full.
             proc    zvar_frame_push
+            glo     ra
+            plo     r7                  ; r7.0 = return_pc_bank,
+                                        ; captured immediately -- ra
+                                        ; itself gets clobbered below
+                                        ; (frame_top) before this
+                                        ; record is actually written;
+                                        ; r7 is free until this same
+                                        ; proc's own later local-copy
+                                        ; countdown reuses it, well
+                                        ; after the write site below
+
             ghi     rc
             smi     16
             lbdf    zvfp_fail           ; local_count > 15
@@ -160,17 +181,24 @@ FRAME_SIZE:              equ     36
             str     r8                  ; +0: return_pc
             inc     r8
 
+            glo     r7                  ; d = return_pc_bank, still
+                                        ; where it was stashed at entry
+            str     r8                  ; +2: return_pc_bank
+            inc     r8
+
             glo     rc
-            str     r8                  ; +2: store_variable
+            str     r8                  ; +3: store_variable
             inc     r8
 
             ghi     rc
-            str     r8                  ; +3: local_count
+            str     r8                  ; +4: local_count
             inc     r8
 
             ghi     rc
             plo     r7                  ; r7.0 = local_count (copy
-                                        ; countdown)
+                                        ; countdown) -- return_pc_bank's
+                                        ; own earlier use of r7 is done
+                                        ; by now, safe to repurpose
 zvfp_copy:
             glo     r7
             lbz     zvfp_copy_done
@@ -213,7 +241,9 @@ zvfp_fail:
             rtn
             endp
 
-; zvar_frame_pop: returns RD = return_pc, RF.0 = store_variable. Also
+; zvar_frame_pop: returns RD = return_pc, RC.0 = return_pc's own bank
+; (the high word/bank a story file over 64K needs alongside it -- see
+; FRAME_RETURN_PC_BANK's own comment), RF.0 = store_variable. Also
 ; truncates the eval stack (zsptr) back to what it was when this
 ; frame was pushed, discarding any operands the routine left on it.
 ; DF=1 if the frame stack is empty.
@@ -257,15 +287,21 @@ zvpp_nonempty:
             phi     rd
             ldn     r8
             plo     rd                  ; rd = return_pc (+0)
-            inc     r8
+            inc     r8                  ; r8 = +2
 
-            ldn     r8                  ; d = store_variable (+2)
+            ldn     r8                  ; d = return_pc_bank (+2)
+            plo     rc                  ; rc.0 = return_pc_bank
+            inc     r8                  ; r8 = +3
+
+            ldn     r8                  ; d = store_variable (+3)
             plo     rf
-            add16   r8, 2               ; skip store_variable(+2) and
-                                        ; local_count(+3): r8 = +4
+            add16   r8, 2               ; skip store_variable(+3) and
+                                        ; local_count(+4): r8 = +5
+                                        ; (FRAME_LOCALS)
 
             mov     r9, r8
-            add16   r9, 30              ; r9 = frame_base + 34
+            add16   r9, 30              ; r9 = frame_base + 35
+                                        ; (FRAME_STACK_BASE)
             lda     r9
             phi     ra
             ldn     r9
@@ -342,9 +378,14 @@ zlgr_have_frame:
             shl                         ; d = variable * 2 (variable
                                         ; <= 15, so max 30 -- fits a
                                         ; byte, no overflow)
-            adi     2                   ; d = FRAME_LOCALS + variable*2
+            adi     3                   ; d = FRAME_LOCALS + variable*2
                                         ; - 2, i.e. the offset of
-                                        ; locals[variable-1]
+                                        ; locals[variable-1] (FRAME_
+                                        ; LOCALS is 5, so the constant
+                                        ; here is 5-2=3 -- shifted from
+                                        ; 2 when FRAME_RETURN_PC_BANK
+                                        ; pushed every later field
+                                        ; forward by one byte)
             plo     ra
             ldi     0
             phi     ra                  ; ra = 0:offset
@@ -428,7 +469,9 @@ zlgw_have_frame:
 
             glo     r9
             shl
-            adi     2
+            adi     3                   ; see zv_local_or_global_read's
+                                        ; own identical computation for
+                                        ; why this is 3, not 2
             plo     ra
             ldi     0
             phi     ra

@@ -37,7 +37,6 @@ int story_header_parse(const uint8_t *image, size_t length,
     if (declared_length < STORY_HEADER_SIZE || declared_length > length ||
         header->high_memory < header->static_memory ||
         header->static_memory < STORY_HEADER_SIZE ||
-        header->dictionary >= header->static_memory ||
         header->object_table >= header->static_memory ||
         header->globals < 0x0c || header->globals >= header->static_memory ||
         header->abbreviations >= header->static_memory) {

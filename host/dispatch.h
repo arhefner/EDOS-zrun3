@@ -36,6 +36,9 @@ struct vm_context {
     uint16_t dictionary_table;  /* from the story header; needed by
                                 * "sread" to tokenize against the
                                 * game's own dictionary */
+    uint16_t abbrev_table;      /* from the story header; needed by
+                                * ztext_decode to expand a z-char 1-3
+                                * abbreviation reference */
     ztext_emit_fn emit;         /* called for each character a "print"-
                                 * family or new_line opcode produces,
                                 * unless "output_stream" has redirected
@@ -67,7 +70,7 @@ struct vm_context {
  * branching/calling/returning as the opcode itself dictates). Covers
  * the full V3 instruction set except "verify" (the story-file
  * checksum opcode -- this reference model has no notion of a story
- * file to checksum) and "call 0" (do_call's own documented gap):
+ * file to checksum):
  * arithmetic, comparison, variables, memory (loadw/storew/loadb/
  * storeb), the object tree, properties, every text-producing opcode,
  * random, sread (ties in the dictionary/parser subsystems), save/

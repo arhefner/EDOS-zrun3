@@ -18,8 +18,17 @@
 #include    include/kernel_api.inc
 
 ; zdisp_emit_string: RF = NUL-terminated string (set immediately
-; before the call).
+; before the call). Always returns DF=0.
+;
+; The clc is load-bearing, not decoration: K_MSG's own DF is not part of
+; its documented contract, and on real hardware it comes back set. This
+; routine used to return it verbatim, so any caller that treated its DF
+; as a result inherited a spurious failure -- zdispatch.asm's print_obj
+; did exactly that. diag/zdispatchdiag.asm's own capture-buffer double
+; for this hook has always ended in clc, so the two implementations of
+; the same interface disagreed about DF and no diagnostic could see it.
             proc    zdisp_emit_string
             call    K_MSG
+            clc
             rtn
             endp
